@@ -57,6 +57,8 @@ node packages/runtime/dist/cli.js --id idea --url http://127.0.0.1:64342/stream 
 挂进 DSH profile（隔离实例，或你自己真实的 profile）：
 [`profiles/dsh-node-repl/README.zh-CN.md`](profiles/dsh-node-repl/README.zh-CN.md)。
 
+接入一个 MCP provider 只是在 Profile 的 `node-repl-runtime-bootstrap` 配置里新增一项；**runtime、adapter 和 bootstrap 三个 npm 包不依赖该 provider 的 npm 包**。例如 Chrome provider 只启动已安装的 `pi-control-chrome` MCP adapter，IDEA provider 只连 IDEA 已开启的 MCP endpoint——Profile 决定其命令、URL 和本地版本，运行时不引入 provider-specific dependency。
+
 ## 复用清单
 
 **不自己写**：JS transform / 解析器、内核子进程与协议、绑定检查点与取消回滚、MCP 客户端与会话恢复、隔离运行时。

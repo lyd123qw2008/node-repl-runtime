@@ -33,6 +33,10 @@ The IDE is an MCP provider attached to the node_repl kernel, not a tool family:
   this value ALWAYS if you are aware of it. Without it such a call fails with
   `MCP_CALL_FAILED: Unable to determine the target project`; that message lists the
   currently open projects, so a cell that forgot the argument can recover from it alone.
+- **This is configuration, not a package dependency.** The kernel connects to IDEA's
+  already-enabled MCP endpoint; the three node-repl packages do not depend on an IDEA
+  package or a JetBrains checkout. Replacing IDEA with another configured MCP provider
+  does not require changing the kernel or its DSH adapter.
 
 ## Scope and safety
 

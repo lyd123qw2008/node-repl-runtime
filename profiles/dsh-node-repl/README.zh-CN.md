@@ -11,6 +11,8 @@
 
 **只装 adapter 不够**：它声明依赖 `nodeReplRuntime` 这个 service，没有 bootstrap 提供它就永远处于 pending，一个工具都不会注册（有测试守着这个行为）。
 
+> **provider 不是 package dependency。** 这里的三个 `@lyd123qw2008/node-repl-*` 包只提供内核、目录投影和 DSH 两工具面；IDEA、Chrome 或其他 MCP 的 endpoint/命令是 Profile 配置。比如 Chrome provider 调用 Profile 已安装的 `pi-control-chrome` MCP adapter，runtime 本身不依赖 `pi-control-chrome`；换成另一个 MCP 也不需要改或重发这三个包。
+
 > 下文出现的 `<path-to-this-repo>` 与 `<path-to-dsh-checkout>` 是**占位符**：前者指本仓库在你机器上的位置，后者指你的 DeepSeek Harness checkout。照抄时换成实际路径。
 
 ## 隔离启动
