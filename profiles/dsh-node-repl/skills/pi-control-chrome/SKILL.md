@@ -63,11 +63,16 @@ never silently dropped (the vocabulary has one owner in `bridge/response-modes.m
   operation (or fails with "The selected browser tab changed before the request could start").
   Always pass the handle of the tab you mean.
 - The **`tabFence`** and document **`incarnation`** are the document-identity boundary.
-  Navigation, reload, document replacement, tab closure, SPA history movement, a changed
+  Navigation, reload, document replacement, tab closure, a changed
   fence, or a Bridge restart invalidate observations: re-observe instead of reusing a
-  handle, a ref or a `snapshotId` from before the change.
-- **`eN`** page-map refs and **`aN`** Chromium AX refs are document-scoped. Pass the
-  matching `snapshotId` with the ref, and re-take the observation after any boundary.
+  handle, a ref or a `snapshotId` from before the change. An in-app route change is **not** a
+  boundary: identity follows the document (`performance.timeOrigin` plus a per-document token),
+  not the URL, so a `pushState` route change keeps handles and refs usable.
+- **`eN`** page-map refs are **document-scoped**: an element keeps its number for the life of the
+  document, so re-observing never renumbers it and a ref outlives the observation that published it
+  (`resolvedBy: document_registry`). An **`aN`** AX ref and a DOM-CUA **`node_id`** are
+  **observation-scoped** instead: pass their matching `snapshotId`. A visible-DOM node also carries
+  the `ref` of its element when a snapshot already named it, so keep that one if you will act again.
 - If more than one target is ready, select the requested `browserId` explicitly. Never
   pick the newest connection, the active window, or the first list entry as a guess.
 - Omit unused optional fields, and never send `index: -1` or an empty selector.
