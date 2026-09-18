@@ -1,8 +1,8 @@
 {
-  "name": "@node-repl-runtime/adapter-dsh",
-  "version": "0.0.0",
-  "private": true,
-  "description": "The two-tool DSH face for the node_repl runtime",
+  "name": "@lyd123qw2008/node-repl-dsh-adapter",
+  "version": "0.1.0",
+  "description": "The two-tool DSH face (`js` / `js_reset`) for the node_repl runtime",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -13,6 +13,31 @@
     },
     "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "!dist/*.tsbuildinfo",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "node-repl",
+    "mcp",
+    "dsh",
+    "deepseek-harness",
+    "code-mode",
+    "tool-facade"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lyd123qw2008/node-repl-runtime.git",
+    "directory": "packages/adapter-dsh"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
@@ -21,7 +46,7 @@
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-tools": "0.1.6-alpha.1",
-    "@node-repl-runtime/runtime": "workspace:*"
+    "@lyd123qw2008/node-repl-runtime": "workspace:*"
   },
   "devDependencies": {
     "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.1",

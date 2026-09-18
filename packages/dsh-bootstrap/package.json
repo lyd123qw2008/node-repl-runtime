@@ -1,8 +1,8 @@
 {
-  "name": "@node-repl-runtime/dsh-bootstrap",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@lyd123qw2008/node-repl-dsh-bootstrap",
+  "version": "0.1.0",
   "description": "Mounts the node_repl runtime into a DSH profile from configuration alone",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,6 +12,31 @@
       "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/*.tsbuildinfo",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "node-repl",
+    "mcp",
+    "dsh",
+    "deepseek-harness",
+    "profile"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lyd123qw2008/node-repl-runtime.git",
+    "directory": "packages/dsh-bootstrap"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dsh": {
     "bundle": {
@@ -26,8 +51,8 @@
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.2",
     "@deepseek-ai/dsh-tools": "0.1.6-alpha.1",
-    "@node-repl-runtime/adapter-dsh": "workspace:*",
-    "@node-repl-runtime/runtime": "workspace:*"
+    "@lyd123qw2008/node-repl-dsh-adapter": "workspace:*",
+    "@lyd123qw2008/node-repl-runtime": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

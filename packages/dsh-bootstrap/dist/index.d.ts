@@ -17,7 +17,7 @@
  * with no capabilities would look like a working setup and quietly do nothing.
  */
 import type { Context } from '@deepseek-ai/cordis';
-import { type McpProviderSpec } from '@node-repl-runtime/runtime';
+import { type McpProviderSpec } from '@lyd123qw2008/node-repl-runtime';
 export declare const name = "node-repl-runtime-bootstrap";
 /** Needs the tool runtime only to noop until the face registers; the face owns tools. */
 export declare const inject: readonly [];

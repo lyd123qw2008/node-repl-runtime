@@ -3,16 +3,16 @@
   "private": true,
   "description": "Isolated DSH profile: the two-tool node_repl face over configured MCP servers",
   "dependencies": {
-    "@deepseek-ai/dsh-base": "link:D:/liuyongdan/code/deepseek-harness-upgrade-0.1.6-alpha.1/packages/bundle/base",
-    "@deepseek-ai/dsh-web-app": "link:D:/liuyongdan/code/deepseek-harness-upgrade-0.1.6-alpha.1/packages/bundle/web-app",
-    "@node-repl-runtime/dsh-bootstrap": "link:D:/liuyongdan/code/node-repl-runtime/packages/dsh-bootstrap"
+    "@deepseek-ai/dsh-base": "link:<path-to-dsh-checkout>/packages/bundle/base",
+    "@deepseek-ai/dsh-web-app": "link:<path-to-dsh-checkout>/packages/bundle/web-app",
+    "@lyd123qw2008/node-repl-dsh-bootstrap": "link:<path-to-this-repo>/packages/dsh-bootstrap"
   },
   "dsh": {
     "profile": {
       "bundles": [
         "@deepseek-ai/dsh-base",
         "@deepseek-ai/dsh-web-app",
-        "@node-repl-runtime/dsh-bootstrap"
+        "@lyd123qw2008/node-repl-dsh-bootstrap"
       ],
       "patchReload": "startup"
     }

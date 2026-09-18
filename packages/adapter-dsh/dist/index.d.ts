@@ -10,7 +10,7 @@
  * so it can be tested without a host, and the Cordis plugin below only wires them up.
  */
 import type { Context } from '@deepseek-ai/cordis';
-import type { CapabilityRuntime } from '@node-repl-runtime/runtime';
+import type { CapabilityRuntime } from '@lyd123qw2008/node-repl-runtime';
 export * from './descriptions.js';
 /** Names are fixed: the model surface must not vary with what is attached. */
 export declare const NODE_REPL_TOOL_NAMES: readonly ["js", "js_reset"];

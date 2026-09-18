@@ -6,10 +6,12 @@
 
 | 插件 | 作用 |
 | --- | --- |
-| `@node-repl-runtime/dsh-bootstrap` | 读配置、连 MCP、起内核、`provide('nodeReplRuntime')` |
-| `@node-repl-runtime/adapter-dsh` | `inject: ['tools','nodeReplRuntime']`，注册 `js` / `js_reset` |
+| `@lyd123qw2008/node-repl-dsh-bootstrap` | 读配置、连 MCP、起内核、`provide('nodeReplRuntime')` |
+| `@lyd123qw2008/node-repl-dsh-adapter` | `inject: ['tools','nodeReplRuntime']`，注册 `js` / `js_reset` |
 
 **只装 adapter 不够**：它声明依赖 `nodeReplRuntime` 这个 service，没有 bootstrap 提供它就永远处于 pending，一个工具都不会注册（有测试守着这个行为）。
+
+> 下文出现的 `<path-to-this-repo>` 与 `<path-to-dsh-checkout>` 是**占位符**：前者指本仓库在你机器上的位置，后者指你的 DeepSeek Harness checkout。照抄时换成实际路径。
 
 ## 隔离启动
 
@@ -17,7 +19,7 @@
 $home2 = 'D:\temp\nr-dsh-home'
 $profile = Join-Path $home2 'profiles\acr-node-repl'
 New-Item -ItemType Directory -Force (Split-Path -Parent $profile) | Out-Null
-Copy-Item -Recurse 'D:\liuyongdan\code\node-repl-runtime\profiles\dsh-node-repl' $profile
+Copy-Item -Recurse '<path-to-this-repo>\profiles\dsh-node-repl' $profile
 corepack pnpm --dir $profile install
 
 # provider 配置是机器本地的，所以放环境变量、不进仓库
@@ -29,7 +31,7 @@ corepack pnpm --dir $profile install
 
 $env:DSH_HOME = $home2
 $env:NODE_REPL_PROVIDERS_FILE = (Join-Path $home2 'providers.json')
-node 'D:\liuyongdan\code\deepseek-harness-upgrade-0.1.6-alpha.1\apps\cli\lib\bin.js' --profile acr-node-repl --no-open --port 3099
+node '<path-to-dsh-checkout>\apps\cli\lib\bin.js' --profile acr-node-repl --no-open --port 3099
 ```
 
 启动日志里应出现一行自证：
@@ -49,8 +51,8 @@ node 'D:\liuyongdan\code\deepseek-harness-upgrade-0.1.6-alpha.1\apps\cli\lib\bin
 ```jsonc
 {
   "dependencies": {
-    "@node-repl-runtime/dsh-bootstrap": "link:D:/liuyongdan/code/node-repl-runtime/packages/dsh-bootstrap",
-    "@node-repl-runtime/adapter-dsh": "link:D:/liuyongdan/code/node-repl-runtime/packages/adapter-dsh"
+    "@lyd123qw2008/node-repl-dsh-bootstrap": "link:<path-to-this-repo>/packages/dsh-bootstrap",
+    "@lyd123qw2008/node-repl-dsh-adapter": "link:<path-to-this-repo>/packages/adapter-dsh"
   }
 }
 ```
@@ -62,7 +64,7 @@ node 'D:\liuyongdan\code\deepseek-harness-upgrade-0.1.6-alpha.1\apps\cli\lib\bin
 ```yaml
 - insert:
     - id: node-repl-runtime-bootstrap
-      name: '@node-repl-runtime/dsh-bootstrap'
+      name: '@lyd123qw2008/node-repl-dsh-bootstrap'
       config:
         providers:
           - id: idea
@@ -72,7 +74,7 @@ node 'D:\liuyongdan\code\deepseek-harness-upgrade-0.1.6-alpha.1\apps\cli\lib\bin
             inject:
               projectPath: D:/path/to/an/open/project
     - id: node-repl-runtime-face
-      name: '@node-repl-runtime/adapter-dsh'
+      name: '@lyd123qw2008/node-repl-dsh-adapter'
 ```
 
 **3. 顺序有讲究，而且未必需要重启**

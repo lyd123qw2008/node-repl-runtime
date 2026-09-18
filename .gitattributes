@@ -1,0 +1,10 @@
+# Keep the repository LF-only. It is developed on Windows and released from Linux CI,
+# and without this a Windows checkout rewrites every text file on the first touch.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.wasm binary
+*.tgz binary

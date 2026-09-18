@@ -1,8 +1,8 @@
 {
-  "name": "@node-repl-runtime/runtime",
-  "version": "0.0.0",
-  "private": true,
+  "name": "@lyd123qw2008/node-repl-runtime",
+  "version": "0.1.0",
   "description": "node_repl-shaped runtime: a persistent JS kernel with any MCP server injected as a capability catalog",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,6 +11,31 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "files": [
+    "dist",
+    "!dist/*.tsbuildinfo",
+    "assets",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "keywords": [
+    "node-repl",
+    "mcp",
+    "model-context-protocol",
+    "code-mode",
+    "capability-runtime"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lyd123qw2008/node-repl-runtime.git",
+    "directory": "packages/runtime"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

@@ -1,3 +1,9 @@
 node_modules/
 *.tsbuildinfo
 tmp-*
+
+# Local-only. The one-off reuse spike and its raw run logs are machine-local working
+# material: they carry absolute paths of the machine that produced them, and their
+# conclusions were folded into docs/02-reuse-spike-results.zh-CN.md. Kept on disk.
+spike/
+docs/evidence/

@@ -26,7 +26,7 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: 0.1.6-alpha.1
         version: 0.1.6-alpha.1(e89197212305e1b19bd6df05221bc44b)
-      '@node-repl-runtime/runtime':
+      '@lyd123qw2008/node-repl-runtime':
         specifier: workspace:*
         version: link:../runtime
     devDependencies:
@@ -48,10 +48,10 @@ importers:
       '@deepseek-ai/dsh-tools':
         specifier: 0.1.6-alpha.1
         version: 0.1.6-alpha.1(e89197212305e1b19bd6df05221bc44b)
-      '@node-repl-runtime/adapter-dsh':
+      '@lyd123qw2008/node-repl-dsh-adapter':
         specifier: workspace:*
         version: link:../adapter-dsh
-      '@node-repl-runtime/runtime':
+      '@lyd123qw2008/node-repl-runtime':
         specifier: workspace:*
         version: link:../runtime
     devDependencies:

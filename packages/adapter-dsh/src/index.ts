@@ -13,7 +13,7 @@
 import { defineTool, type ToolRunContext } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-tools'
-import type { CapabilityRuntime, JsCellResult } from '@node-repl-runtime/runtime'
+import type { CapabilityRuntime, JsCellResult } from '@lyd123qw2008/node-repl-runtime'
 import { JS_RESET_TOOL_DESCRIPTION, JS_TOOL_DESCRIPTION } from './descriptions.js'
 
 export * from './descriptions.js'

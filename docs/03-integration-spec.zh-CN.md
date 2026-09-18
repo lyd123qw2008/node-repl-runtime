@@ -138,8 +138,8 @@ js_reset   清空内核绑定（目录会立刻重新装好）
 
 | 插件 | 作用 |
 | --- | --- |
-| `@node-repl-runtime/dsh-bootstrap` | 读配置、连 MCP、起内核、`provide('nodeReplRuntime')` |
-| `@node-repl-runtime/adapter-dsh` | `inject: ['tools','nodeReplRuntime']`，注册 `js` / `js_reset` |
+| `@lyd123qw2008/node-repl-dsh-bootstrap` | 读配置、连 MCP、起内核、`provide('nodeReplRuntime')` |
+| `@lyd123qw2008/node-repl-dsh-adapter` | `inject: ['tools','nodeReplRuntime']`，注册 `js` / `js_reset` |
 
 **只装 adapter 不够**：没有 bootstrap 提供 `nodeReplRuntime`，adapter 会一直 pending，一个工具都不注册（`tests/composition.test.ts` 守着这个行为）。
 

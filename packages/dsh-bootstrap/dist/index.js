@@ -17,7 +17,7 @@
  * with no capabilities would look like a working setup and quietly do nothing.
  */
 import { readFileSync } from 'node:fs';
-import { createCapabilityRuntime } from '@node-repl-runtime/runtime';
+import { createCapabilityRuntime } from '@lyd123qw2008/node-repl-runtime';
 export const name = 'node-repl-runtime-bootstrap';
 /** Needs the tool runtime only to noop until the face registers; the face owns tools. */
 export const inject = [];

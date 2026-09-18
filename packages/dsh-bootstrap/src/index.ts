@@ -19,7 +19,7 @@
 
 import { readFileSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
-import { createCapabilityRuntime, type CapabilityRuntime, type McpProviderSpec } from '@node-repl-runtime/runtime'
+import { createCapabilityRuntime, type CapabilityRuntime, type McpProviderSpec } from '@lyd123qw2008/node-repl-runtime'
 
 export const name = 'node-repl-runtime-bootstrap'
 

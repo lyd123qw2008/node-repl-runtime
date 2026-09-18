@@ -1,0 +1,86 @@
+name: Publish
+
+# npm cannot attach a trusted publisher to a package that does not exist yet, so the
+# very first version of each package has to be published by hand (see RELEASING.md).
+# Every version after that can come from here, with no long-lived npm token: the job
+# authenticates with GitHub's OIDC identity, which npm verifies against the trusted
+# publisher configured for each package.
+#
+# Requires, per package, on npmjs.com → Package → Settings → Trusted publishing:
+#   Repository: lyd123qw2008/node-repl-runtime
+#   Workflow:   publish.yml
+# pnpm >= 11.0.7 is required for OIDC; the repository pins it via `packageManager`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: 'Optional exact version every package must declare before publishing'
+        required: false
+        type: string
+      dry_run:
+        description: 'Pack and report what would be published, without publishing'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Enable corepack
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # Never publish something the tests have not seen.
+      - name: Verify (build, typecheck, tests)
+        run: pnpm run verify
+
+      - name: Verify declared version
+        if: inputs.expected_version != ''
+        env:
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+        run: |
+          set -euo pipefail
+          node -e '
+            for (const p of ["runtime", "adapter-dsh", "dsh-bootstrap"]) {
+              const v = require(`./packages/${p}/package.json`).version;
+              if (v !== process.env.EXPECTED_VERSION) {
+                throw new Error(`${p}: ${v} !== ${process.env.EXPECTED_VERSION}`);
+              }
+              console.log(`${p} @ ${v}`);
+            }
+          '
+
+      # `pnpm -r publish` walks the workspace in dependency order and rewrites
+      # `workspace:*` to the concrete published version inside the tarball, so the
+      # manifests on disk keep their workspace references. It skips versions that
+      # already exist on the registry, which makes a re-run safe.
+      - name: Publish
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            pnpm -r publish --access public --no-git-checks --dry-run
+          else
+            pnpm -r publish --access public --no-git-checks
+          fi

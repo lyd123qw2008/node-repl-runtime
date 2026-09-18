@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest'
-import type { CapabilityRuntime } from '@node-repl-runtime/runtime'
+import type { CapabilityRuntime } from '@lyd123qw2008/node-repl-runtime'
 import { NODE_REPL_TOOL_NAMES, createNodeReplTools } from '../src/index.js'
 
 /** DSH's own toolsTokens estimate: ceil(chars / 4) + 4. */

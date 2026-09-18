@@ -26,8 +26,8 @@ describe('bundle wiring', () => {
     const text = readFileSync(join(PACKAGE_DIR, patch!), 'utf8')
     // Both plugins must be inserted by this bundle: the adapter alone stays dormant,
     // and the bootstrap alone registers no tools.
-    expect(text).toContain('@node-repl-runtime/dsh-bootstrap')
-    expect(text).toContain('@node-repl-runtime/adapter-dsh')
+    expect(text).toContain('@lyd123qw2008/node-repl-dsh-bootstrap')
+    expect(text).toContain('@lyd123qw2008/node-repl-dsh-adapter')
   })
 
   it('keeps machine-local values out of the committed patch', () => {

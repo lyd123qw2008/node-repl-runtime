@@ -1,10 +1,14 @@
 {
   "name": "node-repl-runtime",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "node_repl-shaped capability runtime: one persistent JS kernel, any MCP server as a capability catalog",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "packageManager": "pnpm@11.7.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lyd123qw2008/node-repl-runtime.git"
+  },
   "engines": {
     "node": ">=22.19.0"
   },
@@ -13,7 +17,7 @@
     "check": "pnpm run build && pnpm -r --if-present run check",
     "test": "pnpm run build && pnpm -r --if-present run test",
     "verify": "pnpm run check && pnpm run test",
-    "demo": "node packages/demo/dist/cli.js"
+    "demo": "node packages/runtime/dist/cli.js"
   },
   "devDependencies": {
     "@types/node": "^22.20.0",

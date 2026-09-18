@@ -10,6 +10,6 @@
 # plugin load rather than starting with no capabilities.
 - insert:
     - id: node-repl-runtime-bootstrap
-      name: '@node-repl-runtime/dsh-bootstrap'
+      name: '@lyd123qw2008/node-repl-dsh-bootstrap'
     - id: node-repl-runtime-face
-      name: '@node-repl-runtime/adapter-dsh'
+      name: '@lyd123qw2008/node-repl-dsh-adapter'
