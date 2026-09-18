@@ -14,7 +14,7 @@ export const JS_TOOL_DESCRIPTION = [
     '',
     'Output: nothing is returned implicitly. Use `nodeRepl.write(value)` for the text you want back; `console.log` is captured too. Whatever you compute but do not write stays in the kernel, so filter and summarise there instead of returning raw payloads.',
     '',
-    'Bindings: they persist until `js_reset`. Prefer `var` for any name you may define again — re-declaring a `let` or `const` in a later call is a SyntaxError. To change a value, assign to the existing name. A call that throws keeps the bindings it already declared.',
+    'Bindings: they persist until `js_reset`. Prefer `var` for any name you may define again — re-declaring a `let` or `const` in a later call fails that cell with `SyntaxError: Identifier \'name\' has already been declared`; use `var`, a new name, or `js_reset` to clear bindings. To change a value, assign to the existing name. A call that throws keeps the bindings it already declared.',
     '',
     'Statement style: end every top-level statement with an explicit `;`. The kernel injects snapshot code at each statement boundary, so a missing semicolon fails the whole cell with `SyntaxError: Unexpected identifier \'__qwen_repl_..._snapshot\'`; add the `;` and rerun.',
     '',
