@@ -97,7 +97,10 @@ never silently dropped (the vocabulary has one owner in `bridge/response-modes.m
   include readable same-origin iframe text plus bounded `frames` metadata; use
   `includeFrames: false` when embedded documents are out of scope. Cross-origin or
   still-loading frames report a reason (`frameLoading`) instead of being silently
-  dropped — wait and re-observe.
+  dropped — wait and re-observe. An unscoped `browser_snapshot` briefly samples a
+  still-loading top-level document; it returns the newest settled read with
+  `settleSamples`, or a coherent `unsettled: true` read if loading persists. A
+  selector-scoped snapshot keeps its requested target as the readiness signal.
 - A truncated read is an **incomplete answer**: `truncated` appears with `omitted` counts
   and a `nextAction`/`recommendation`. Narrow with `selector`/`target`, or raise
   `maxChars`/`maxNodes` when a target is genuinely missing. Complete reads omit
