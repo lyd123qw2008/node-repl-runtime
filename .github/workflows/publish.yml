@@ -72,15 +72,22 @@ jobs:
             }
           '
 
-      # `pnpm -r publish` walks the workspace in dependency order and rewrites
-      # `workspace:*` to the concrete published version inside the tarball, so the
-      # manifests on disk keep their workspace references. It skips versions that
-      # already exist on the registry, which makes a re-run safe.
+      # Two tools, one job each: `pnpm pack` is what rewrites `workspace:*` to the concrete
+      # version inside the tarball, and `npm publish` is what carries the OIDC token in the
+      # shape npm's registry accepts for a trusted publisher. `pnpm -r publish` obtained the
+      # OIDC token and was then refused with "OIDC permission denied for this action" even
+      # though the trusted-publisher entry is correct (verified field by field on all three
+      # packages), while the same kind of entry publishes fine through the npm CLI in the
+      # pi-control-chrome repository. Dependency order matters: runtime, then its dependents.
       - name: Publish
         run: |
           set -euo pipefail
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            pnpm -r publish --access public --no-git-checks --dry-run
-          else
-            pnpm -r publish --access public --no-git-checks
-          fi
+          mkdir -p ./artifacts
+          for pkg in runtime dsh-adapter dsh-bootstrap; do
+            tarball=$(pnpm --filter "@lyd123qw2008/node-repl-$pkg" pack --pack-destination ./artifacts | tail -1)
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "dry run: would publish $tarball"
+            else
+              npm publish "$tarball" --access public --ignore-scripts
+            fi
+          done
