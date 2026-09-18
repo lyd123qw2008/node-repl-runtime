@@ -1,6 +1,6 @@
 {
   "name": "@lyd123qw2008/node-repl-dsh-bootstrap",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Mounts the node_repl runtime into a DSH profile from configuration alone",
   "license": "MIT",
   "type": "module",
