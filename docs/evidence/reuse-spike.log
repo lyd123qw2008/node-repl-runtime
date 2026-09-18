@@ -1,0 +1,85 @@
+[host] provider idea: 67 tool(s)
+[host] bridge listening on 127.0.0.1:59351
+[host] wrote bridge config snapshot
+[host] kernel tools: node_repl, node_repl_wait, node_repl_cancel, node_repl_reset, node_repl_add_node_module_dir
+
+[cell] init: install cap  (206ms)  isError=undefined
+cap ready; providers=idea,list,describe,call,refresh
+
+[cell] chain: real IDEA work  (1305ms)  isError=undefined
+{"hits":2,"more":true,"first":"src\\main\\java\\com\\montnets\\frame\\service\\impl\\MenuServiceImpl.java","problems":0,"modules":1}
+
+[cell] persist + discovery  (6ms)  isError=undefined
+{"capProviders":["idea","list","describe","call","refresh"],"ideaOperations":69,"searchTextSchemaProps":["q","paths","limit"]}
+
+[cell] semantics: let binding  (3ms)  isError=undefined
+counter=1
+
+[cell] semantics: mutate across cells  (5ms)  isError=undefined
+counter=2
+
+[cell] semantics: redeclare let across cells  (4ms)  isError=true
+[node_repl error] SyntaxError: Identifier 'counter' has already been declared
+SyntaxError: Identifier 'counter' has already been declared
+    at new Module (node:internal/vm/module:155:21)
+    at new SourceTextModule (node:internal/vm/module:301:5)
+    at Object.createCell (file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/module-loader.mjs:519:21)
+    at file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/kernel.mjs:940:27
+    at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:63:14)
+    at handleExec (file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/kernel.mjs:935:24)
+    at file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/kernel.mjs:1103:47
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+[cell] semantics: function persists  (4ms)  isError=undefined
+double(21)=42
+
+[cell] semantics: call fn from later cell  (9ms)  isError=undefined
+later double(5)=10
+
+[cell] semantics: throwing cell  (12ms)  isError=true
+[node_repl error] Error: deliberate
+Error: deliberate
+    at D:\liuyongdan\code\node-repl-runtime\spike\kernelroot\.qwen_node_repl_cell_1_44a0c3f4-33dc-4d21-a3b1-5b588c9a37ec.mjs:2:7
+    at SourceTextModule.evaluate (node:internal/vm/module:233:26)
+    at Object.evaluate (file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/module-loader.mjs:539:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+[cell] semantics: after throw  (15ms)  isError=undefined
+survived=yes
+
+[cell] semantics: cap still live after throw  (11ms)  isError=undefined
+modules=1
+
+[cell] redecl: var then var  (5ms)  isError=undefined
+v=1
+
+[cell] redecl: var again  (3ms)  isError=undefined
+v=2
+
+[cell] redecl: let then var  (3ms)  isError=undefined
+L=1
+
+[cell] redecl: var shadowing a let  (3ms)  isError=true
+[node_repl error] SyntaxError: Identifier 'L' has already been declared
+SyntaxError: Identifier 'L' has already been declared
+    at new Module (node:internal/vm/module:155:21)
+    at new SourceTextModule (node:internal/vm/module:301:5)
+    at Object.createCell (file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/module-loader.mjs:519:21)
+    at file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/kernel.mjs:940:27
+    at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:63:14)
+    at handleExec (file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/kernel.mjs:935:24)
+    at file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/kernel.mjs:1103:47
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+[cell] redecl: assignment creates global  (4ms)  isError=true
+[node_repl error] ReferenceError: createdByAssignment is not defined
+ReferenceError: createdByAssignment is not defined
+    at D:\liuyongdan\code\node-repl-runtime\spike\kernelroot\.qwen_node_repl_cell_1_a9a814c8-ec21-4208-a6fc-bc6e6cf9a28e.mjs:1:21
+    at SourceTextModule.evaluate (node:internal/vm/module:233:26)
+    at Object.evaluate (file:///D:/liuyongdan/code/node-repl-runtime/spike/node_modules/@qwen-code/node-repl-mcp/dist/runtime/module-loader.mjs:539:29)
+    at process.processTicksAndRejections (node:internal/process/task_queues:103:5)
+
+[cell] redecl: read that global later  (3ms)  isError=undefined
+later=GONE
+
+[host] done

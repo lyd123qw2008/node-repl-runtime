@@ -1,0 +1,29 @@
+{
+  "name": "@node-repl-runtime/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "node_repl-shaped runtime: a persistent JS kernel with any MCP server injected as a capability catalog",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@qwen-code/node-repl-mcp": "0.1.6"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "@types/node": "^22.20.0",
+    "zod": "4.2.0"
+  }
+}

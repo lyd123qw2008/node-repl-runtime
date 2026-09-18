@@ -1,0 +1,4 @@
+# Deliberately empty: both plugins arrive from the bootstrap bundle's own patch, and
+# provider configuration comes from the environment at launch. Keeping this empty means
+# the profile carries no machine-local value — no MCP endpoint, no project path.
+[]

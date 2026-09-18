@@ -1,0 +1,15 @@
+# Mounts the node_repl runtime, then the two-tool face on top of it.
+#
+# Order matters only in that the adapter waits for `nodeReplRuntime`; Cordis resolves
+# that by itself, so listing both here is enough.
+#
+# Provider configuration is NOT committed here: which MCP servers to attach, and which
+# host-owned arguments to inject, are machine-local. Supply them via the `config` block
+# of this profile's own patch, via `--patch`, or via the environment
+# (NODE_REPL_PROVIDERS / NODE_REPL_PROVIDERS_FILE). A missing configuration fails the
+# plugin load rather than starting with no capabilities.
+- insert:
+    - id: node-repl-runtime-bootstrap
+      name: '@node-repl-runtime/dsh-bootstrap'
+    - id: node-repl-runtime-face
+      name: '@node-repl-runtime/adapter-dsh'

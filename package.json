@@ -1,0 +1,23 @@
+{
+  "name": "node-repl-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "node_repl-shaped capability runtime: one persistent JS kernel, any MCP server as a capability catalog",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present run build",
+    "check": "pnpm run build && pnpm -r --if-present run check",
+    "test": "pnpm run build && pnpm -r --if-present run test",
+    "verify": "pnpm run check && pnpm run test",
+    "demo": "node packages/demo/dist/cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

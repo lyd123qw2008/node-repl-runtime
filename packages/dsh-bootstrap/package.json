@@ -1,0 +1,36 @@
+{
+  "name": "@node-repl-runtime/dsh-bootstrap",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Mounts the node_repl runtime into a DSH profile from configuration alone",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@deepseek-ai/cordis": "4.0.2",
+    "@deepseek-ai/dsh-tools": "0.1.6-alpha.1",
+    "@node-repl-runtime/adapter-dsh": "workspace:*",
+    "@node-repl-runtime/runtime": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "vitest": "^4.1.8"
+  }
+}
