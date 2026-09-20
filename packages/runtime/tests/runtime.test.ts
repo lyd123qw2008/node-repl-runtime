@@ -179,6 +179,57 @@ describe('capability runtime (hermetic)', () => {
     expect(result.output).toContain('"tmp":"string"')
   })
 
+  it('forwards the narrow outbound proxy policy to the kernel without leaking host environment', async () => {
+    const names = [
+      'HTTP_PROXY',
+      'HTTPS_PROXY',
+      'NO_PROXY',
+      'NODE_USE_ENV_PROXY',
+      'DSH_RUNTIME_PROXY_TEST_SECRET',
+    ] as const
+    const previous = new Map(names.map(name => [name, process.env[name]]))
+    let proxied: CapabilityRuntime | undefined
+    try {
+      process.env.HTTP_PROXY = 'http://127.0.0.1:19795'
+      process.env.HTTPS_PROXY = 'http://127.0.0.1:19795'
+      process.env.NO_PROXY = 'localhost,127.0.0.1,::1'
+      process.env.NODE_USE_ENV_PROXY = '1'
+      process.env.DSH_RUNTIME_PROXY_TEST_SECRET = 'must-not-reach-the-kernel'
+
+      proxied = await createCapabilityRuntime({
+        providers: [{ id: 'proxy', transport: 'streamable-http', url: 'http://127.0.0.1:1/unused' }],
+        connector: spec => Promise.resolve(fakeProvider(spec, [])),
+      })
+      const readKernelNetworkEnv = () => proxied!.js(
+        "const module = await import('node:module');\n"
+        + "const require = module.createRequire(import.meta.url);\n"
+        + "const childProcess = require('node:process');\n"
+        + "nodeRepl.write(JSON.stringify({ http: childProcess.env.HTTP_PROXY, https: childProcess.env.HTTPS_PROXY, noProxy: childProcess.env.NO_PROXY, useEnvProxy: childProcess.env.NODE_USE_ENV_PROXY, hasSecret: Object.prototype.hasOwnProperty.call(childProcess.env, 'DSH_RUNTIME_PROXY_TEST_SECRET') }));",
+      )
+      const expectedEnvironment = {
+        http: 'http://127.0.0.1:19795',
+        https: 'http://127.0.0.1:19795',
+        noProxy: 'localhost,127.0.0.1,::1',
+        useEnvProxy: '1',
+        hasSecret: false,
+      }
+      const observed = await readKernelNetworkEnv()
+      expect(observed.status).toBe('ok')
+      expect(JSON.parse(observed.output)).toEqual(expectedEnvironment)
+
+      await proxied.jsReset()
+      const observedAfterReset = await readKernelNetworkEnv()
+      expect(observedAfterReset.status).toBe('ok')
+      expect(JSON.parse(observedAfterReset.output)).toEqual(expectedEnvironment)
+    } finally {
+      await proxied?.dispose()
+      for (const [name, value] of previous) {
+        if (value === undefined) delete process.env[name]
+        else process.env[name] = value
+      }
+    }
+  }, 120_000)
+
   it('stops a cell that overruns its budget and keeps the kernel usable', async () => {
     await runtime.js('var beforeTimeout = "kept";')
     const started = Date.now()

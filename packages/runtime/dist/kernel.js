@@ -26,6 +26,35 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 const BRIDGE_ASSET_DIR = fileURLToPath(new URL('../assets/nr-cap/', import.meta.url));
 /**
+ * The MCP stdio client deliberately starts children with a small safe environment.
+ * A persistent node_repl kernel nevertheless needs the host's explicit outbound
+ * routing policy: otherwise a DSH process launched from a stale Windows Explorer
+ * environment can bypass its configured proxy while shell commands do not.
+ *
+ * Keep this allowlist deliberately narrow. Passing all of process.env would leak
+ * unrelated host credentials/configuration into code running in the kernel.
+ */
+const KERNEL_NETWORK_ENV_NAMES = [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'NO_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'all_proxy',
+    'no_proxy',
+    'NODE_USE_ENV_PROXY',
+];
+function kernelNetworkEnvironment() {
+    const environment = {};
+    for (const name of KERNEL_NETWORK_ENV_NAMES) {
+        const value = process.env[name];
+        if (value !== undefined)
+            environment[name] = value;
+    }
+    return environment;
+}
+/**
  * Where the kernel child lives. Kept scratch: it holds a generated config, not user data.
  *
  * The name is a UUID rather than a timestamp: two runtimes created in the same
@@ -51,7 +80,12 @@ export async function startKernel(options) {
         })),
     }, null, 2)}\n`);
     const client = new Client({ name: 'node-repl-runtime', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } });
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [options.entry], cwd: options.root }));
+    await client.connect(new StdioClientTransport({
+        command: process.execPath,
+        args: [options.entry],
+        cwd: options.root,
+        env: kernelNetworkEnvironment(),
+    }));
     /**
      * The kernel yields control after `yield_time_ms` — 10 s unless asked otherwise —
      * and expects a `node_repl_wait` follow-up. That yield carries a cell id in text and
