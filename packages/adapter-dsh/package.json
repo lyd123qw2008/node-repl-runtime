@@ -1,6 +1,6 @@
 {
   "name": "@lyd123qw2008/node-repl-dsh-adapter",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "The two-tool DSH face (`js` / `js_reset`) for the node_repl runtime",
   "license": "MIT",
   "type": "module",

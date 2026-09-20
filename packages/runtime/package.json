@@ -1,6 +1,6 @@
 {
   "name": "@lyd123qw2008/node-repl-runtime",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "node_repl-shaped runtime: a persistent JS kernel with any MCP server injected as a capability catalog",
   "license": "MIT",
   "type": "module",
