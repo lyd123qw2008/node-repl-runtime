@@ -28,12 +28,16 @@ Read from, in order:
 2. `NODE_REPL_PROVIDERS` (inline JSON),
 3. `NODE_REPL_PROVIDERS_FILE` (path to a JSON file).
 
-**Finding nothing is a load failure, not an empty runtime.** A profile that silently came up with no capabilities would look like a working setup and quietly do nothing.
+An empty provider list is valid: the bootstrap starts an empty capability runtime, keeps
+`js` / `js_reset` available, and reports an empty `cap` catalog. A provider with
+`disabled: true` is skipped before its MCP server is started or connected. Initial
+connection failures are non-fatal, matching the optional DSH MCP-client startup policy;
+the failed provider contributes no capabilities and the error is logged.
 
 Providers are machine-local facts (endpoints, project paths), which is why they belong in the profile patch or the environment rather than in a package. The load logs a self-proof line:
 
 ```text
-[node-repl-runtime] mounted idea=67 | host-owned args injected: projectPath
+[node-repl-runtime] mounted idea=67 blender=26 | disabled: cua
 ```
 
 MIT licensed.

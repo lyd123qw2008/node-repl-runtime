@@ -13,8 +13,9 @@
  *   2. `NODE_REPL_PROVIDERS` (inline JSON),
  *   3. `NODE_REPL_PROVIDERS_FILE` (path to a JSON file).
  *
- * Nothing found is a load failure, not an empty runtime: a profile that silently came up
- * with no capabilities would look like a working setup and quietly do nothing.
+ * An empty provider list is valid: the bootstrap can provide an empty capability runtime
+ * whose `js` / `js_reset` face remains usable. Connection failures are non-fatal, matching
+ * the optional DSH MCP-client startup policy; failed providers simply contribute no tools.
  */
 
 import { readFileSync } from 'node:fs'
@@ -41,7 +42,7 @@ export function resolveProviders(
   config: NodeReplBootstrapConfig,
   env: Readonly<Record<string, string | undefined>> = process.env,
 ): readonly McpProviderSpec[] {
-  if (config.providers !== undefined && config.providers.length > 0) return config.providers
+  if (config.providers !== undefined) return config.providers
 
   const inline = env.NODE_REPL_PROVIDERS
   if (inline !== undefined && inline.trim() !== '') {
@@ -55,10 +56,7 @@ export function resolveProviders(
     return Array.isArray(parsed) ? parsed : parsed.providers ?? []
   }
 
-  throw new Error(
-    'node-repl-runtime: no MCP providers configured. Set config.providers on this plugin, '
-    + 'or export NODE_REPL_PROVIDERS (inline JSON) / NODE_REPL_PROVIDERS_FILE (path to JSON).',
-  )
+  return []
 }
 
 export const apply = async (ctx: Context, config: NodeReplBootstrapConfig = {}): Promise<void> => {
@@ -75,9 +73,13 @@ export const apply = async (ctx: Context, config: NodeReplBootstrapConfig = {}):
 
   const report = runtime.catalog()
     .map(provider => `${provider.id}=${provider.operations.length}`)
-    .join(' ')
+    .join(' ') || 'no connected providers'
+  const disabled = providers
+    .filter(provider => provider.disabled === true)
+    .map(provider => provider.id)
   console.log(
     `[node-repl-runtime] mounted ${report}`
+    + (disabled.length > 0 ? ` | disabled: ${disabled.join(',')}` : '')
     + (providers.some(provider => Object.keys(provider.inject ?? {}).length > 0)
       ? ` | host-owned args injected: ${providers.flatMap(provider => Object.keys(provider.inject ?? {})).join(',')}`
       : ''),

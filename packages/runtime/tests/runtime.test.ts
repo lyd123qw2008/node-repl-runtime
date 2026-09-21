@@ -386,12 +386,52 @@ describe('multi-provider and exposure narrowing', () => {
     }
   }, 120_000)
 
-  it('refuses to start when nothing attached at all', async () => {
-    await expect(createCapabilityRuntime({
+  it('starts with an empty capability catalog when no providers are configured', async () => {
+    const runtime = await createCapabilityRuntime({ providers: [] })
+    try {
+      expect(runtime.catalog()).toHaveLength(0)
+      const result = await runtime.js('nodeRepl.write("n=" + cap.list().length);')
+      expect(result.status).toBe('ok')
+      expect(result.output).toContain('n=0')
+    } finally {
+      await runtime.dispose()
+    }
+  }, 120_000)
+
+  it('skips disabled providers before the connector is called', async () => {
+    let calls = 0
+    const runtime = await createCapabilityRuntime({
+      providers: [{ id: 'disabled', transport: 'streamable-http', url: 'http://127.0.0.1:1/unused', disabled: true }],
+      connector: spec => {
+        calls += 1
+        return Promise.resolve(fakeProvider(spec, []))
+      },
+    })
+    try {
+      expect(calls).toBe(0)
+      expect(runtime.catalog()).toHaveLength(0)
+      const result = await runtime.js('nodeRepl.write("n=" + cap.list().length);')
+      expect(result.status).toBe('ok')
+      expect(result.output).toContain('n=0')
+    } finally {
+      await runtime.dispose()
+    }
+  }, 120_000)
+
+  it('keeps running when every enabled provider fails to connect', async () => {
+    const runtime = await createCapabilityRuntime({
       providers: [{ id: 'bad', transport: 'streamable-http', url: 'http://127.0.0.1:1/unused' }],
       connector: () => Promise.reject(new Error('connection refused')),
-    })).rejects.toThrow(/no provider connected/)
-  })
+    })
+    try {
+      expect(runtime.catalog()).toHaveLength(0)
+      const result = await runtime.js('nodeRepl.write("n=" + cap.list().length);')
+      expect(result.status).toBe('ok')
+      expect(result.output).toContain('n=0')
+    } finally {
+      await runtime.dispose()
+    }
+  }, 120_000)
 
   it('narrows exposure with include without inventing a review step', () => {
     const tools = [

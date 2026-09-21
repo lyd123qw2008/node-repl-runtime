@@ -49,21 +49,23 @@ export interface CapabilityRuntime {
 export async function createCapabilityRuntime(options: RuntimeOptions): Promise<CapabilityRuntime> {
   const connector = options.connector ?? connectMcpProvider
   const providers = new Map<string, ProviderConnection>()
-  const failed: string[] = []
 
   for (const spec of options.providers) {
+    if (spec.disabled === true) continue
     try {
       providers.set(spec.id, await connector(spec))
     } catch (error) {
-      // A provider that will not connect must not take the runtime down: the model
-      // can still work with whatever else attached, and `capHelp()` will show only
-      // the live ones. The failure is reported on the status path instead.
-      failed.push(`${spec.id}: ${error instanceof Error ? error.message : String(error)}`)
+      // Match the optional MCP-client startup policy: a provider that will not
+      // connect contributes no capabilities, but it must not take the runtime
+      // down. Other providers — including none — can still be used.
+      console.warn(
+        `[node-repl-runtime] provider ${spec.id} failed to connect: `
+        + (error instanceof Error ? error.message : String(error)),
+      )
     }
   }
-  if (providers.size === 0) {
-    throw new Error(`no provider connected (${failed.join('; ') || 'none configured'})`)
-  }
+  // An empty catalog is a valid runtime state. The face still provides js and
+  // js_reset, while cap.list() simply reports no connected capabilities.
 
   const bridge = await startBridge(providers)
   const root = options.kernelRoot ?? createKernelRoot()

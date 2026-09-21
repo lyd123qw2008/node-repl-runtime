@@ -35,7 +35,7 @@ Node 22.19+ is required. The kernel itself is the Apache-2.0 [`@qwen-code/node-r
 | `runtime.dispose()` | Close kernels, the bridge, and every MCP session. |
 | `applyInjection(injected, args)` | Merge host-owned arguments, refusing caller-supplied ones. |
 
-Provider configuration is generic: `id`, `label`, `transport` (`streamable-http` | `stdio`), `url`/`command`+`args`, `env`, optional `inject` (host-owned constants removed from the model-visible schema), and optional `include` narrowing. A provider that fails to attach does not take the others down.
+Provider configuration is generic: `id`, `label`, `transport` (`streamable-http` | `stdio`), `url`/`command`+`args`, `env`, optional `disabled` (skip the provider before connecting), optional `inject` (host-owned constants removed from the model-visible schema), and optional `include` narrowing. A provider that fails to attach does not take the others down; an empty provider catalog is a valid runtime state.
 
 `node packages/runtime/dist/cli.js --id idea --url <endpoint>` attaches one server from the command line; without `--code` it prints the projected catalog.
 

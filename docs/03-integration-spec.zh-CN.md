@@ -1,6 +1,7 @@
 # 接入规范：把一个 MCP 服务器接进来
 
 > 目标：**接入一个 MCP 服务器 = 一份配置，零 provider 专属代码。**
+> 组件边界、调用链和 provider 生命周期见 [架构说明](./04-architecture.zh-CN.md)。
 > 本规范不含"安全策略"章节，因为那不是接入方的事——见 §4。
 
 ## 1. 最短路径
@@ -36,8 +37,9 @@ cell status: ok (523ms)
 | `id` | ✅ | 模型用的命名空间：`cap.<id>.<operation>` |
 | `transport` | ✅ | `streamable-http`（配 `url`）或 `stdio`（配 `command`/`args`/`cwd`/`env`） |
 | `label` | | 展示用名称 |
+| `disabled` | | `true` 时跳过该 provider，不启动/连接 MCP server |
 | `inject` | | **宿主拥有的常量参数**，见 §3 |
-| `include` | | 可选的暴露收窄：匹配工具名的正则数组；`null`（默认）= 全部暴露 |
+| `include` | | 已连接后可选的暴露收窄：匹配工具名的正则数组；`null`（默认）= 全部暴露 |
 
 写在 JSON 里用 `--config <file.json>`，形状是 `{ "providers": [ {...} ] }`。
 
@@ -45,6 +47,8 @@ cell status: ok (523ms)
 
 | 步骤 | 行为 |
 | --- | --- |
+| 禁用 | `disabled: true` → 跳过连接和发现；不启动 stdio 子进程，也不执行 HTTP 握手或 `tools/list` |
+| 连接 | 启动/连接失败只记录错误，该 provider 不贡献能力；其他 provider 和空 runtime 继续工作 |
 | 发现 | `tools/list` → operations；`id` = 服务器自己的工具名；group = 名字首段 |
 | 输入 schema | 服务器 schema **剔除 `inject` 的键**，envelope 收紧为 `additionalProperties: false` |
 | safety | `readOnlyHint: true` → `read`，其余 → `mutate`。**仅展示，不做门禁** |
@@ -143,7 +147,7 @@ js_reset   清空内核绑定（目录会立刻重新装好）
 
 **只装 adapter 不够**：没有 bootstrap 提供 `nodeReplRuntime`，adapter 会一直 pending，一个工具都不注册（`tests/composition.test.ts` 守着这个行为）。
 
-配置来源（按优先级）：`config.providers` → `NODE_REPL_PROVIDERS`（内联 JSON）→ `NODE_REPL_PROVIDERS_FILE`（文件路径）。**三者都没有则加载失败**，不会起一个没有能力的空壳。
+配置来源（按优先级）：`config.providers` → `NODE_REPL_PROVIDERS`（内联 JSON）→ `NODE_REPL_PROVIDERS_FILE`（文件路径）。三者都没有时也会启动空 runtime；`js` / `js_reset` 仍可用，而 `cap.list()` 返回空数组。provider 的初始连接失败同样不阻止启动，只会让该 provider 暂时没有能力并记录错误。
 
 隔离实例的完整步骤、以及"挂到自己真实 profile"的 patch 片段与回滚方法，见
 [`../profiles/dsh-node-repl/README.zh-CN.md`](../profiles/dsh-node-repl/README.zh-CN.md)。

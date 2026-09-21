@@ -3,14 +3,26 @@
 一个 **node_repl 形状的能力运行时**：一个常驻 JS 内核，把任意 MCP 服务器当作能力目录注入进去。
 
 ```text
-模型
- │  js / js_reset                     ← 恒为两个工具
+DSH 模型
+ │  js / js_reset                     ← adapter 恒为两个工具
  ▼
-常驻 JS 内核（top-level await、绑定跨调用存活、抛错保留已有绑定）
- │  cap.*  ← 实时投影出来的 MCP 能力目录
+node-repl-runtime-face                ← 注册 DSH 工具
+ │  nodeReplRuntime
  ▼
-MCP 服务器（IDEA、以及任何其他 MCP：一份配置，零 provider 代码）
+CapabilityRuntime                     ← catalog + host bridge
+ │                         ▲
+ │                         │ tools/call
+ ▼                         │
+@qwen-code/node-repl-mcp   │          ← 常驻 JS kernel
+ │  nr-cap / cap.*          │
+ └────────── bridge ────────┘
+              │
+              ▼
+外部 MCP provider（IDEA、Chrome、Cua、Blender……）
 ```
+
+完整组件边界、provider 生命周期和调用路径见
+[`docs/04-architecture.zh-CN.md`](docs/04-architecture.zh-CN.md)。
 
 ## 已实测
 
@@ -27,12 +39,13 @@ MCP 服务器（IDEA、以及任何其他 MCP：一份配置，零 provider 代�
 
 ## 文档
 
-先读 **[`docs/01-prior-art-and-reuse.zh-CN.md`](docs/01-prior-art-and-reuse.zh-CN.md)**（现成方案、许可证、两半的缺口矩阵），再看 **[`docs/02-reuse-spike-results.zh-CN.md`](docs/02-reuse-spike-results.zh-CN.md)**（spike 实测与语义表），接入用 **[`docs/03-integration-spec.zh-CN.md`](docs/03-integration-spec.zh-CN.md)**。
+先读 **[`docs/01-prior-art-and-reuse.zh-CN.md`](docs/01-prior-art-and-reuse.zh-CN.md)**（现成方案、许可证、两半的缺口矩阵），再看 **[`docs/02-reuse-spike-results.zh-CN.md`](docs/02-reuse-spike-results.zh-CN.md)**（spike 实测与语义表），架构看 **[`docs/04-architecture.zh-CN.md`](docs/04-architecture.zh-CN.md)**，接入用 **[`docs/03-integration-spec.zh-CN.md`](docs/03-integration-spec.zh-CN.md)**。
 
 ```text
 docs/01-prior-art-and-reuse.zh-CN.md     先验方案与复用决策（含实测证据与归类）
 docs/02-reuse-spike-results.zh-CN.md     复用内核的 spike 结果（路径 A 已验证）
 docs/03-integration-spec.zh-CN.md        接入规范 + 挂进 DSH profile 的方法
+docs/04-architecture.zh-CN.md            组件边界、调用链与 provider 生命周期
 docs/evidence/reuse-spike*.log           原始 spike 日志
 spike/                                   最初的可行性 spike（保留为证据）
 packages/runtime/                        宿主侧：目录桥 + MCP 目录 + inject + 内核管理 + CLI

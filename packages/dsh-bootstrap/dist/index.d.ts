@@ -13,8 +13,9 @@
  *   2. `NODE_REPL_PROVIDERS` (inline JSON),
  *   3. `NODE_REPL_PROVIDERS_FILE` (path to a JSON file).
  *
- * Nothing found is a load failure, not an empty runtime: a profile that silently came up
- * with no capabilities would look like a working setup and quietly do nothing.
+ * An empty provider list is valid: the bootstrap can provide an empty capability runtime
+ * whose `js` / `js_reset` face remains usable. Connection failures are non-fatal, matching
+ * the optional DSH MCP-client startup policy; failed providers simply contribute no tools.
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { type McpProviderSpec } from '@lyd123qw2008/node-repl-runtime';

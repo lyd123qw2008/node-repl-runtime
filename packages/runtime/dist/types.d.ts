@@ -15,6 +15,8 @@ export interface McpProviderSpec {
     readonly args?: readonly string[];
     readonly cwd?: string;
     readonly env?: Readonly<Record<string, string>>;
+    /** When true, skip this provider without starting or connecting its MCP server. */
+    readonly disabled?: boolean;
     /**
      * Host-owned constant arguments, added on the host side before the MCP call.
      *

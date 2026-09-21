@@ -1,9 +1,9 @@
 /**
  * Structural tests for the profile-facing half.
  *
- * Booting a profile is the operator's job, but the two ways it can fail for boring
- * reasons — a bundle patch that does not declare the plugins, or provider
- * configuration that resolves to nothing — are cheap to pin here.
+ * Booting a profile is the operator's job, but the bundle wiring and provider
+ * configuration precedence are cheap to pin here. An empty provider list is an
+ * intentional runtime state, not a bootstrap failure.
  */
 
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
@@ -57,9 +57,14 @@ describe('provider configuration resolution', () => {
     expect(resolveProviders({}, { NODE_REPL_PROVIDERS_FILE: file })).toEqual([idea])
   })
 
-  it('fails loudly rather than starting with no capabilities', () => {
-    // A profile that came up silently empty would look like a working setup.
-    expect(() => resolveProviders({}, {})).toThrow(/no MCP providers configured/)
-    expect(() => resolveProviders({ providers: [] }, { NODE_REPL_PROVIDERS: '   ' })).toThrow(/no MCP providers configured/)
+  it('resolves missing or empty configuration as an empty provider list', () => {
+    expect(resolveProviders({}, {})).toEqual([])
+    expect(resolveProviders({ providers: [] }, { NODE_REPL_PROVIDERS: JSON.stringify([idea]) })).toEqual([])
+    expect(resolveProviders({}, { NODE_REPL_PROVIDERS: '   ' })).toEqual([])
+  })
+
+  it('preserves disabled provider fields from explicit configuration', () => {
+    const disabled = { ...idea, disabled: true }
+    expect(resolveProviders({ providers: [disabled] }, {})).toEqual([disabled])
   })
 })
