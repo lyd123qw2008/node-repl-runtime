@@ -123,6 +123,24 @@ type ImageRefusal = string
 const IMAGE_OMITTED = 'image omitted'
 
 /**
+ * The display name for one committed image.
+ *
+ * The name is metadata, not identity: DSH stores images content-addressed
+ * (`objects/<sha256>`, digest-verified deduplication), so a constant name can neither
+ * collide with nor overwrite another image, and no path or lookup is derived from it.
+ * Keeping it constant is therefore deliberate — one recognisable `node-repl` origin
+ * instead of a taxonomy invented from free model text (`title`). The one part worth
+ * deriving is the extension: `mediaType` is what the store validates and what the reader
+ * re-derives, so a `.png` suffix on a jpeg block is a name contradicting its own bytes.
+ */
+function imageAttachmentName(mediaType: string): string {
+  const slash = mediaType.indexOf('/')
+  const subtype = slash === -1 ? '' : mediaType.slice(slash + 1)
+  if (subtype === '') return 'node-repl'
+  return `node-repl.${subtype === 'jpeg' ? 'jpg' : subtype}`
+}
+
+/**
  * Refuse images when the exact calling route cannot accept them.
  *
  * The failure this prevents is not cosmetic. An image on a text-only route fails the
@@ -182,7 +200,7 @@ async function commitImages(
       // existed, so the cast records a fact rather than asserting one. A store that
       // accepts fewer types still gets to refuse it, below.
       mediaType: image.mimeType as ImageMediaType,
-      name: 'node-repl.png',
+      name: imageAttachmentName(image.mimeType),
     })))
     return { refs }
   } catch (error) {
