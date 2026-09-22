@@ -49,6 +49,8 @@
     "@lyd123qw2008/node-repl-runtime": "workspace:*"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-attachment": "0.1.6-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.1.6-alpha.1",
     "@deepseek-ai/dsh-system-prompt": "0.1.6-alpha.1",
     "@types/node": "^22.20.0",
     "vitest": "^4.1.8"

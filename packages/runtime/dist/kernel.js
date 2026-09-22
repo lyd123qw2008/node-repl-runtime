@@ -67,6 +67,39 @@ export function createKernelRoot() {
     cpSync(BRIDGE_ASSET_DIR, join(root, 'node_modules', 'nr-cap'), { recursive: true });
     return root;
 }
+/**
+ * The kernel reports a cell as an ordered list of MCP content blocks — text and images
+ * interleaved, with consecutive text already coalesced — and its `output-adapter` has
+ * validated and budgeted every image by the time it arrives here. So this is a copy, not
+ * a gate: flattening it would lose where an image sat between two texts, and
+ * re-validating it would create a second source of truth for one policy.
+ *
+ * Unknown block types are dropped rather than guessed at: an MCP block this runtime does
+ * not model is not text, and rendering it as text would be invention.
+ */
+function collectCellBlocks(content) {
+    const blocks = [];
+    for (const raw of content ?? []) {
+        const block = raw;
+        if (block === null || typeof block !== 'object')
+            continue;
+        if (block.type === 'text' && typeof block.text === 'string') {
+            blocks.push({ kind: 'text', text: block.text });
+        }
+        else if (block.type === 'image' && typeof block.data === 'string' && typeof block.mimeType === 'string') {
+            blocks.push({ kind: 'image', data: block.data, mimeType: block.mimeType });
+        }
+    }
+    return blocks;
+}
+/**
+ * The prose view of a cell's blocks: text segments joined with `\n`, which is exactly what
+ * this runtime returned before `blocks` existed. Callers that read only prose see no
+ * change; anything that renders content walks `blocks` instead.
+ */
+function textOf(blocks) {
+    return blocks.filter(block => block.kind === 'text').map(block => block.text).join('\n');
+}
 export async function startKernel(options) {
     // The kernel reads this snapshot at import time, so it must exist before start.
     writeFileSync(join(options.root, 'node_modules', 'nr-cap', 'config.json'), `${JSON.stringify({
@@ -113,15 +146,14 @@ export async function startKernel(options) {
     const call = async (name, args) => {
         const started = Date.now();
         const result = await client.callTool({ name, arguments: args }, { timeout: 900_000 });
-        const text = (result.content ?? [])
-            .filter((block) => block.type === 'text')
-            .map(block => block.text)
-            .join('\n');
+        const blocks = collectCellBlocks(result.content);
+        const text = textOf(blocks);
         const structured = result.structuredContent;
         if (structured?.status !== undefined) {
             return {
                 result: {
                     status: structured.status,
+                    blocks,
                     output: text.trimEnd(),
                     ...structured.error === undefined ? {} : {
                         error: {
@@ -138,7 +170,7 @@ export async function startKernel(options) {
         if (runningCellId !== undefined) {
             return {
                 runningCellId,
-                result: { status: 'running', output: text.trimEnd(), durationMs: Date.now() - started },
+                result: { status: 'running', blocks, output: text.trimEnd(), durationMs: Date.now() - started },
             };
         }
         // No structured payload: the kernel reports the cell through text and `isError`.
@@ -147,6 +179,7 @@ export async function startKernel(options) {
         return {
             result: {
                 status: notice ?? (failed ? 'error' : 'ok'),
+                blocks,
                 output: text.trimEnd(),
                 ...failed ? { error: { name: 'Error', message: text.trim() } } : {},
                 durationMs: Date.now() - started,
