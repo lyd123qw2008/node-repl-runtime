@@ -117,6 +117,12 @@ describe('two-tool face', () => {
     // `emitImage` must be named, or a screenshot provider is unusable from a cell.
     expect(description).toContain('_images')
     expect(description).toContain('emitImage')
+    // The kernel is one long-lived process, and nothing else tells the model what that
+    // implies: a bound screenshot costs memory for the rest of the session, a detached
+    // child escapes every reaper, and an undefined `cap` means the kernel was replaced.
+    expect(description).toContain('Kernel lifetime')
+    expect(description).toContain('detached')
+    expect(description).toContain('cap` is ever undefined')
   })
 
   it('hands the cell straight to the runtime and formats the result as text', async () => {
