@@ -643,3 +643,39 @@ describe('provider connection cleanup', () => {
     await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false)
   }, 60_000)
 })
+
+describe('kernel replacement', () => {
+  it('puts the catalog back after a cell loses its kernel', async () => {
+    const runtime = await createCapabilityRuntime({
+      providers: [{ id: 'fake', transport: 'streamable-http', url: 'http://127.0.0.1:1/unused' }],
+      connector: spec => Promise.resolve(fakeProvider(spec, [])),
+      cellTimeoutMs: 30_000,
+    })
+    try {
+      // The kernel child is not this process's child — the official MCP server owns it — so
+      // its pid has to come from the cell API rather than from a spawn handle.
+      const who = await runtime.js('nodeRepl.write(String(nodeRepl.getHeapStatus().pid));')
+      const kernelPid = Number(who.output.match(/(\d+)/)?.[1])
+      expect(Number.isSafeInteger(kernelPid) && kernelPid > 0).toBe(true)
+
+      // Kill it *while a cell is running*: that is the ending the official reports as
+      // `crashed`, and the replacement kernel starts with no `cap` in scope. This is the
+      // reachable version of the failure — a cell that exhausts the kernel heap ends the
+      // same way.
+      const pending = runtime.js('await new Promise(resolve => setTimeout(resolve, 10_000));', { timeoutMs: 20_000 })
+      await new Promise(resolve => setTimeout(resolve, 1_000))
+      process.kill(kernelPid, 'SIGKILL')
+      const crashed = await pending
+      expect(crashed.status).toBe('crashed')
+
+      // The fix under test: the runtime re-installs on that ending, so one lost cell does
+      // not cost the whole capability surface, and it says so rather than letting the model
+      // call `js_reset` for something already restored.
+      expect(crashed.output).toContain('capability catalog reinstalled')
+      const after = await runtime.js('nodeRepl.write("cap=" + typeof cap);')
+      expect(after.output).toContain('cap=object')
+    } finally {
+      await runtime.dispose()
+    }
+  }, 120_000)
+})

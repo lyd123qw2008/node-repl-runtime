@@ -26,6 +26,11 @@ import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 const BRIDGE_ASSET_DIR = fileURLToPath(new URL('../assets/nr-cap/', import.meta.url));
 /**
+ * Appended to a cell that lost its kernel, so the model does not call `js_reset` to recover
+ * something the runtime has already put back.
+ */
+const CATALOG_RESTORED_NOTICE = '[node_repl kernel was replaced: bindings lost, capability catalog reinstalled]';
+/**
  * The MCP stdio client deliberately starts children with a small safe environment.
  * A persistent node_repl kernel nevertheless needs the host's explicit outbound
  * routing policy: otherwise a DSH process launched from a stale Windows Explorer
@@ -195,6 +200,41 @@ export async function startKernel(options) {
      * that never answers cannot leave the kernel permanently unusable.
      */
     let activeCellId;
+    /** Guards the recovery path, which runs a cell (`install`) from inside `run`. */
+    let recovering = false;
+    /**
+     * Put the catalog back after a cell that took the kernel with it.
+     *
+     * `crashed` is the one status that *tells* us the kernel was replaced — the official
+     * reports it exactly when a kernel dies mid-cell, and a replacement starts with no `cap`.
+     * Ignoring it turns one lost cell into a lost capability surface: every later cell
+     * answers `cap is not defined` until someone guesses `js_reset`. That is reachable in
+     * practice, not just in theory: a cell that exhausts the kernel heap is one way to die.
+     *
+     * `install()` is idempotent, and this runs only on that rare ending, so the cost is one
+     * cell. The blind spot is a kernel that dies while *idle*: the next cell then reports
+     * `ok` in a fresh kernel with no catalog, which no host-side signal can see — so the tool
+     * description tells the model to call `js_reset` when `cap` is undefined.
+     *
+     * A recovery failure is not reported as the cell's outcome: the crashed result is the
+     * more useful fact, and the missing-catalog path above covers the rest.
+     */
+    const recoverCatalog = async (result) => {
+        if (recovering)
+            return result;
+        recovering = true;
+        try {
+            await install();
+        }
+        catch {
+            return result;
+        }
+        finally {
+            recovering = false;
+        }
+        const blocks = [...result.blocks, { kind: 'text', text: CATALOG_RESTORED_NOTICE }];
+        return { ...result, blocks, output: textOf(blocks).trimEnd() };
+    };
     const cancelActiveCell = async () => {
         if (activeCellId === undefined)
             return;
@@ -242,7 +282,10 @@ export async function startKernel(options) {
             if (ABANDONED_CELL_STATUSES.has(outcome.result.status)) {
                 options.bridge.abandonInFlight(`cell ended as ${outcome.result.status}: nothing can read its answers`);
             }
-            return { ...outcome.result, durationMs: Date.now() - began };
+            const result = { ...outcome.result, durationMs: Date.now() - began };
+            // A crashed cell took the kernel with it; the replacement has no catalog unless this
+            // puts one back.
+            return result.status === 'crashed' ? await recoverCatalog(result) : result;
         },
         reset: async () => {
             // `node_repl_reset` refuses while a cell is active, so clear the slot first.

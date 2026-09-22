@@ -23,6 +23,8 @@ export const JS_TOOL_DESCRIPTION = [
   '',
   'Runtime rules: top-level `await` works; `await import("package")` works, but top-level static `import` does not; `process` is not available; a cell that overruns its budget is cancelled so the kernel stays usable — earlier bindings normally survive, but a cell that will not stop restarts the kernel and discards them.',
   '',
+  'Kernel lifetime: bindings live in the kernel process until `js_reset`, so whatever you leave at top level keeps costing memory — null out large values (`r = null`) once you are done with them, especially a `_images` screenshot you no longer need. Do not spawn a detached process from a cell: it outlives the kernel and nothing reaps it. If `cap` is ever undefined, the kernel was replaced (a crash or a kill): call `js_reset` to reinstall the catalog and start clean.',
+  '',
   'Some arguments are host-owned and are injected for you — they are absent from operation schemas and must not be passed. If a call reports an argument as host-owned, call the operation without it.',
 ].join('\n')
 
