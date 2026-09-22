@@ -17,7 +17,12 @@ import * as adapter from '../src/index.js'
 
 function fakeRuntime(): CapabilityRuntime {
   return {
-    js: vi.fn(async () => ({ status: 'ok' as const, output: 'mounted', durationMs: 1 })),
+    js: vi.fn(async () => ({
+      status: 'ok' as const,
+      blocks: [{ kind: 'text' as const, text: 'mounted' }],
+      output: 'mounted',
+      durationMs: 1,
+    })),
     jsReset: vi.fn(async () => {}),
     catalog: () => [],
     dispose: vi.fn(async () => {}),

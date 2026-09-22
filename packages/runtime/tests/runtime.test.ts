@@ -11,7 +11,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   applyInjection,
+  collectProviderImages,
   createCapabilityRuntime,
+  mergeProviderImages,
   projectOperation,
   selectTools,
   type CapabilityRuntime,
@@ -25,6 +27,12 @@ interface SeenCall {
   readonly operation: string
   readonly args: Readonly<Record<string, unknown>>
 }
+
+/**
+ * A real 2×2 PNG, base64. The kernel sniffs image bytes and refuses anything without the
+ * PNG magic, so a placeholder string would test the rejection path instead of the happy one.
+ */
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAARSURBVBhXY/jPwPAfhBlgDABHygf5POQJCgAAAABJRU5ErkJggg=='
 
 function fakeProvider(spec: McpProviderSpec, seen: SeenCall[]): ProviderConnection {
   const operations: ProjectedOperation[] = [
@@ -82,6 +90,34 @@ describe('capability runtime (hermetic)', () => {
     const result = await runtime.js("nodeRepl.write('hello from the kernel');")
     expect(result.status).toBe('ok')
     expect(result.output).toContain('hello from the kernel')
+  })
+
+  it('returns an emitted image between the text around it', async () => {
+    // The kernel reports content blocks in order, and this runtime must not flatten them:
+    // an image sitting between two prose blocks is the whole reason `blocks` exists.
+    const result = await runtime.js(
+      "nodeRepl.write('before');\n"
+      + `await nodeRepl.emitImage('data:image/png;base64,${PNG_BASE64}');\n`
+      + "nodeRepl.write('after');",
+    )
+
+    expect(result.status).toBe('ok')
+    expect(result.blocks.map(block => block.kind)).toEqual(['text', 'image', 'text'])
+    expect(result.blocks[1]).toEqual({ kind: 'image', mimeType: 'image/png', data: PNG_BASE64 })
+    // The prose view is derived, and is exactly what this runtime returned before `blocks`
+    // existed — the model-facing path is `blocks`, but nothing reading only prose changes.
+    expect(result.output).toBe('before\nafter')
+  })
+
+  it('keeps a refused image out of the blocks instead of passing it through', async () => {
+    // `emitImage` sniffs the bytes and throws inside the cell when they are not a real
+    // PNG/JPEG/WebP, so this failure is visible where the cell ran — never a block the
+    // model would be told about but could not actually see.
+    const result = await runtime.js("await nodeRepl.emitImage('data:image/png;base64,bm90YXBuZw==');")
+    expect(result.status).toBe('error')
+    expect(result.blocks.filter(block => block.kind === 'image')).toEqual([])
+    expect(result.output).toContain('emitImage')
+    expect(result.output).toContain('PNG, JPEG, and WebP')
   })
 
   it('keeps bindings across cells, and scopes output to the cell that produced it', async () => {
@@ -507,5 +543,55 @@ describe('projection (pure)', () => {  it('strips host-owned arguments from the 
     expect(applyInjection({ projectPath: '/p' }, args)).toEqual({ q: 'x', projectPath: '/p' })
     expect(args).toEqual({ q: 'x' })
     expect(() => applyInjection({ projectPath: '/p' }, { projectPath: '/other' })).toThrow(/host-owned/)
+  })
+})
+
+describe('provider image admission (pure)', () => {
+  it('parks admitted images on an object result and leaves image-free replies untouched', () => {
+    const admitted = mergeProviderImages(
+      { app_name: 'paint' },
+      collectProviderImages([{ type: 'text', text: 'shot' }, { type: 'image', mimeType: 'image/png', data: PNG_BASE64 }]),
+    )
+    expect(admitted).toEqual({
+      app_name: 'paint',
+      _images: [{ mimeType: 'image/png', data: PNG_BASE64 }],
+    })
+
+    // A provider that never returns pixels must see a byte-identical result: this step is
+    // additive, and "additive" has to mean the identity when there is nothing to add.
+    const reply = { items: ['a'] }
+    expect(mergeProviderImages(reply, collectProviderImages([{ type: 'text', text: 'items' }]))).toBe(reply)
+    expect(mergeProviderImages(reply, collectProviderImages(undefined))).toBe(reply)
+  })
+
+  it('refuses MIME types and sizes the kernel would refuse, and says how many', () => {
+    // 6 MB of base64 decodes to ~4.5 MB, past the 4 MB per-image ceiling.
+    const oversize = 'A'.repeat(6 * 1024 * 1024)
+    const collected = collectProviderImages([
+      { type: 'image', mimeType: 'image/bmp', data: PNG_BASE64 },
+      { type: 'image', mimeType: 'image/png', data: '' },
+      { type: 'image', mimeType: 'image/png', data: oversize },
+      { type: 'image', mimeType: 'image/webp', data: PNG_BASE64 },
+    ])
+
+    // Asserted by MIME rather than by whole payloads: a failing diff on a 6 MB string is
+    // unreadable, and the payloads are not what this test is about.
+    // The allowlist is the kernel's own — a provider must not be able to hand the model
+    // pixels the kernel would have refused on the way out.
+    expect(collected.images.map(image => image.mimeType)).toEqual(['image/webp'])
+    expect(collected.dropped).toBe(3)
+    expect(mergeProviderImages({ ok: true }, collected)).toMatchObject({ _imagesDropped: 3 })
+  })
+
+  it('keeps a non-object reply under `_value` instead of reshaping it', () => {
+    const collected = collectProviderImages([{ type: 'image', mimeType: 'image/png', data: PNG_BASE64 }])
+    // A bare content array is a legitimate reply shape; widening it into an object silently
+    // would be worse than one documented hop.
+    const merged = mergeProviderImages([{ type: 'text', text: 'x' }], collected)
+    expect(merged).toEqual({
+      _value: [{ type: 'text', text: 'x' }],
+      _images: [{ mimeType: 'image/png', data: PNG_BASE64 }],
+    })
+    expect(mergeProviderImages(null, collected)).toEqual({ _value: null, _images: [{ mimeType: 'image/png', data: PNG_BASE64 }] })
   })
 })

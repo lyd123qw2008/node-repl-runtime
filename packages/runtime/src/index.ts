@@ -21,6 +21,16 @@ import type {
 
 export * from './types.js'
 export { applyInjection, projectOperation, selectTools, connectMcpProvider } from './catalog.js'
+// Pure functions of one provider reply, so they are asserted directly instead of through a
+// CONNECTED server — the same reason `projectOperation` and `selectTools` are exported.
+export {
+  collectProviderImages,
+  mergeProviderImages,
+  PROVIDER_IMAGE_MAX_BYTES,
+  PROVIDER_IMAGE_TOTAL_MAX_BYTES,
+  type ProviderImage,
+  type ProviderImages,
+} from './catalog.js'
 
 /** The reused kernel server. Its package entry point *is* the MCP server. */
 export const KERNEL_PACKAGE = '@qwen-code/node-repl-mcp'

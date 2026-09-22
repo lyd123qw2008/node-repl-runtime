@@ -15,6 +15,8 @@ export const JS_TOOL_DESCRIPTION = [
   '',
   'Output: nothing is returned implicitly. Use `nodeRepl.write(value)` for the text you want back; `console.log` is captured too. Whatever you compute but do not write stays in the kernel, so filter and summarise there instead of returning raw payloads.',
   '',
+  'Images: pixels never come back on their own either. An operation that captures a screen puts them on its result as `_images` — `{ mimeType, data }`, base64 — e.g. `const r = await cap.cua.get_window_state({ pid, window_id })`. To see one, emit it: `await nodeRepl.emitImage("data:" + r._images[0].mimeType + ";base64," + r._images[0].data)`. Emitted images return in order alongside your text, so emit before writing when the image should come first; an `_images` entry you never emit costs no context, which is why looking is cheap enough to do whenever you need to verify instead of acting blind. Per cell: at most 8 images, 4 MB each, PNG/JPEG/WebP only — anything refused is reported as text in the image\'s place.',
+  '',
   'Bindings: they persist until `js_reset`. Prefer `var` for any name you may define again — re-declaring a `const`/`let`/`function`/`class` in a later call (usually a helper an earlier call already defined) fails that cell with `SyntaxError: Identifier \'name\' has already been declared`; use `var`, a new name, a block `{ ... }`, or `js_reset`. To change a value, assign to the existing name. A call that throws keeps the bindings it already declared.',
   '',
   'Statement style: end every top-level statement with an explicit `;`. The kernel injects snapshot code at each statement boundary, so a missing semicolon fails the whole cell with `SyntaxError: Unexpected identifier \'__qwen_repl_..._snapshot\'`; add the `;` and rerun.',

@@ -55,6 +55,82 @@ export function applyInjection(injected, args) {
     }
     return { ...args, ...injected };
 }
+/**
+ * Image admission for provider results.
+ *
+ * The kernel validates and budgets what a *cell* emits: its `output-adapter` allowlists
+ * png/jpeg/webp, sniffs the bytes, and enforces per-image and aggregate ceilings. A
+ * provider's reply never passes through that gate — it arrives here first — so without
+ * this step the pixels are simply lost (measured against `cap.cua.get_window_state`,
+ * which returns `screenshot_mime_type` and no bytes).
+ *
+ * The numbers are deliberately the kernel's own model-tier budget rather than a second
+ * policy: reusing them means a provider cannot hand the model pixels the kernel would
+ * have refused on the way out.
+ */
+export const PROVIDER_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
+export const PROVIDER_IMAGE_TOTAL_MAX_BYTES = 8 * 1024 * 1024;
+/** The kernel's own allowlist, so the two cannot drift apart silently. */
+const PROVIDER_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+/**
+ * Admit the image blocks of one MCP result.
+ *
+ * Exported for tests, like the other pure projections here: it is a function of the
+ * server's reply alone, so it can be asserted without a server.
+ */
+export function collectProviderImages(content) {
+    if (!Array.isArray(content))
+        return { images: [], dropped: 0 };
+    const images = [];
+    let total = 0;
+    let dropped = 0;
+    for (const raw of content) {
+        const block = raw;
+        if (block === null || typeof block !== 'object' || block.type !== 'image')
+            continue;
+        const mimeType = typeof block.mimeType === 'string' ? block.mimeType.toLowerCase() : '';
+        const data = typeof block.data === 'string' ? block.data : '';
+        // Base64 is 4 encoded characters per 3 bytes. Measuring the ceiling this way avoids
+        // decoding megabytes only to count them, and a ceiling does not need the exact byte
+        // count the way a validator would.
+        const bytes = Math.floor(data.length / 4) * 3;
+        if (!PROVIDER_IMAGE_MIME_TYPES.has(mimeType)
+            || data === ''
+            || bytes > PROVIDER_IMAGE_MAX_BYTES
+            || total + bytes > PROVIDER_IMAGE_TOTAL_MAX_BYTES) {
+            dropped++;
+            continue;
+        }
+        total += bytes;
+        images.push({ mimeType, data });
+    }
+    return { images, dropped };
+}
+/**
+ * Park admitted images on the value the cell will receive.
+ *
+ * `_images` rather than an automatic push is the whole point: bytes sitting on a kernel
+ * value cost no context until the cell writes them out, so "the model asks for pixels"
+ * stays true without the runtime guessing when a picture is worth showing.
+ *
+ * A reply that is not a plain object (a bare content array, a scalar) keeps its value
+ * under `_value`: silently reshaping a provider's answer into an object would be worse
+ * than one documented hop. Nothing is attached at all when the server sent no images,
+ * so every provider that never returns pixels sees a byte-identical result.
+ */
+export function mergeProviderImages(value, collected) {
+    if (collected.images.length === 0 && collected.dropped === 0)
+        return value;
+    const extras = { _images: collected.images };
+    // A drop is reported on the value too. The kernel reports its own drops as visible
+    // text; here the value is the only channel the cell reads.
+    if (collected.dropped > 0)
+        extras._imagesDropped = collected.dropped;
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        return { ...value, ...extras };
+    }
+    return { _value: value, ...extras };
+}
 /** Open one MCP session. Nothing is cached or persisted: the surface is live. */
 export async function connectMcpProvider(spec) {
     const client = new Client({ name: 'node-repl-runtime', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } });
@@ -93,8 +169,12 @@ export async function connectMcpProvider(spec) {
                 throw new Error(text.trim() === '' ? `${spec.id}.${operation} failed` : text);
             }
             // `structuredContent` when the server sends it, otherwise the content blocks.
-            // Passed through verbatim: this runtime never rewrites a provider's result.
-            return result.structuredContent ?? result.content ?? null;
+            // Passed through verbatim: this runtime never rewrites a provider's result. The one
+            // addition is additive and conditional — images the server actually sent are parked
+            // on the value as `_images`, because a `??` on the structured payload would drop
+            // them entirely (they ride in a separate image content block).
+            const value = result.structuredContent ?? result.content ?? null;
+            return mergeProviderImages(value, collectProviderImages(result.content));
         },
         async close() {
             await client.close().catch(() => { });

@@ -64,6 +64,34 @@ export interface ProviderConnection {
     call(operation: string, args: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<unknown>;
     close(): Promise<void>;
 }
+/**
+ * One piece of a cell's explicit output, in the order the cell produced it.
+ *
+ * Text and images share one ordered list because the order is information: a cell that
+ * writes findings, emits a screenshot and then writes what it saw means something
+ * different from one that emits the screenshot last. The kernel already reports them
+ * interleaved — its `output-adapter` coalesces consecutive text and opens a new text
+ * block when an image interrupts — so flattening to a string discards a fact the kernel
+ * deliberately preserved. See `docs/05-image-content-blocks.zh-CN.md`.
+ */
+export type JsCellBlock = {
+    readonly kind: 'text';
+    readonly text: string;
+}
+/**
+ * Base64 bytes exactly as the kernel reported them. The kernel validated the MIME
+ * against its own png/jpeg/webp allowlist and enforced its budgets before this block
+ * existed, so the runtime relays rather than re-validates.
+ *
+ * There is deliberately no `metadata` field: the kernel emits image metadata as a
+ * regular text block immediately before the image, so modelling it again here would
+ * record one fact twice.
+ */
+ | {
+    readonly kind: 'image';
+    readonly data: string;
+    readonly mimeType: string;
+};
 /** Result of one kernel cell. */
 export interface JsCellResult {
     /**
@@ -73,6 +101,14 @@ export interface JsCellResult {
      */
     readonly status: 'ok' | 'error' | 'cancelled' | 'timeout' | 'crashed' | 'running';
     /** Everything the cell wrote, in order: `nodeRepl.write(...)` plus captured `console.*`. */
+    readonly blocks: readonly JsCellBlock[];
+    /**
+     * Plain-text rendering of `blocks`: text segments joined with `\n`.
+     *
+     * Derived, for display and for callers that only read prose. It cannot express where
+     * an image sat between two texts, so anything that renders content blocks walks
+     * `blocks` instead.
+     */
     readonly output: string;
     readonly error?: {
         readonly name: string;
