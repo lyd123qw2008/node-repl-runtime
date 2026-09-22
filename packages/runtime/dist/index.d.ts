@@ -6,7 +6,7 @@
  * *inside* the cell, which is what keeps the model-visible tool surface at two
  * declarations no matter how many MCP servers are attached.
  */
-import type { JsCellResult, JsOptions, McpProviderSpec, ProviderConnection, RuntimeOptions } from './types.js';
+import type { JsCellResult, JsOptions, McpProviderSpec, ProviderConnection, ProviderFailure, RuntimeOptions } from './types.js';
 export * from './types.js';
 export { applyInjection, projectOperation, selectTools, connectMcpProvider } from './catalog.js';
 export { collectProviderImages, mergeProviderImages, PROVIDER_IMAGE_MAX_BYTES, PROVIDER_IMAGE_TOTAL_MAX_BYTES, type ProviderImage, type ProviderImages, } from './catalog.js';
@@ -19,10 +19,18 @@ export interface CapabilityRuntime {
     jsReset(): Promise<void>;
     /** The projected catalog, for host-side reporting (not a model-facing tool). */
     catalog(): readonly ProviderConnection[];
+    /**
+     * Providers that could not be attached, with their reasons.
+     *
+     * Separate from `catalog()` because they are not capabilities: nothing can be called on
+     * them. They ride into the kernel's config snapshot so `capHelp()` can explain an absence
+     * instead of only listing presences.
+     */
+    failures(): readonly ProviderFailure[];
     dispose(): Promise<void>;
 }
 export declare function createCapabilityRuntime(options: RuntimeOptions): Promise<CapabilityRuntime>;
-/** Human-readable connection report, including providers that failed to attach. */
-export declare function describeProviders(providers: readonly ProviderConnection[]): string;
+/** Human-readable connection report: what attached, and what did not with its reason. */
+export declare function describeProviders(providers: readonly ProviderConnection[], failures?: readonly ProviderFailure[]): string;
 export type { McpProviderSpec, ProviderConnection, JsCellResult, JsOptions };
 //# sourceMappingURL=index.d.ts.map

@@ -69,6 +69,19 @@ export interface ProviderConnection {
 }
 
 /**
+ * A provider that could not be attached, and the reason it gave.
+ *
+ * Kept rather than logged and forgotten. The kernel's discovery surface is the only place a
+ * model can ask why a capability is missing, and a silent absence is indistinguishable from
+ * one that was never configured — measured: a `cua` provider that failed to attach looked
+ * exactly like a `cua` provider nobody had written down.
+ */
+export interface ProviderFailure {
+  readonly id: string
+  readonly error: string
+}
+
+/**
  * One piece of a cell's explicit output, in the order the cell produced it.
  *
  * Text and images share one ordered list because the order is information: a cell that

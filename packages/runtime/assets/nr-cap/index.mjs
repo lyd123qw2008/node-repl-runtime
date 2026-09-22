@@ -141,6 +141,15 @@ for (const provider of config.providers) {
 }
 
 /**
+ * Providers that failed to attach, keyed by id, from the same snapshot as the catalog.
+ *
+ * Not capabilities — nothing can be called on them — but a discovery surface that lists
+ * only presences cannot answer "where is cua?" at all, which is exactly what it did when
+ * this was measured.
+ */
+const failures = new Map((config.failures ?? []).map(failure => [failure.id, failure.error]))
+
+/**
  * Compact human-readable catalog, so discovery does not require the caller to know
  * how the snapshot is shaped. Exported rather than installed on `globalThis`: an
  * imported module runs on the module global, not the cell's, so a side-effect global
@@ -148,13 +157,20 @@ for (const provider of config.providers) {
  */
 export function capHelp(providerId) {
   if (providerId === undefined) {
-    return cap.list().map(provider => `${provider.id} (${provider.label}) — ${provider.operations} operation(s)`).join('\n')
+    return [
+      ...cap.list().map(provider => `${provider.id} (${provider.label}) — ${provider.operations} operation(s)`),
+      ...[...failures].map(([id, error]) => `${id} — NOT ATTACHED: ${error}`),
+    ].join('\n')
   }
   const provider = providers.get(providerId)
-  if (provider === undefined) return `unknown provider ${providerId}; known: ${[...providers.keys()].join(', ')}`
-  return provider.operations
-    .map(operation => `${providerId}.${operation.name} [${operation.safety}] ${operation.summary.split('\n')[0].slice(0, 90)}`)
-    .join('\n')
+  if (provider !== undefined) {
+    return provider.operations
+      .map(operation => `${providerId}.${operation.name} [${operation.safety}] ${operation.summary.split('\n')[0].slice(0, 90)}`)
+      .join('\n')
+  }
+  const failure = failures.get(providerId)
+  if (failure !== undefined) return `${providerId} is configured but not attached: ${failure}`
+  return `unknown provider ${providerId}; known: ${[...providers.keys(), ...failures.keys()].join(', ')}`
 }
 
 export { cap }

@@ -111,6 +111,9 @@ export async function startKernel(options) {
             label: provider.label,
             operations: provider.operations,
         })),
+        // Not capabilities — nothing can be called on them — but discovery that lists only
+        // presences cannot answer "where is cua?" at all.
+        failures: options.failures,
     }, null, 2)}\n`);
     const client = new Client({ name: 'node-repl-runtime', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } });
     await client.connect(new StdioClientTransport({

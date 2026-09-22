@@ -30,6 +30,7 @@ function resolveKernelEntry() {
 export async function createCapabilityRuntime(options) {
     const connector = options.connector ?? connectMcpProvider;
     const providers = new Map();
+    const failures = [];
     for (const spec of options.providers) {
         if (spec.disabled === true)
             continue;
@@ -40,8 +41,9 @@ export async function createCapabilityRuntime(options) {
             // Match the optional MCP-client startup policy: a provider that will not
             // connect contributes no capabilities, but it must not take the runtime
             // down. Other providers — including none — can still be used.
-            console.warn(`[node-repl-runtime] provider ${spec.id} failed to connect: `
-                + (error instanceof Error ? error.message : String(error)));
+            const message = error instanceof Error ? error.message : String(error);
+            failures.push({ id: spec.id, error: message });
+            console.warn(`[node-repl-runtime] provider ${spec.id} failed to connect: ${message}`);
         }
     }
     // An empty catalog is a valid runtime state. The face still provides js and
@@ -54,6 +56,7 @@ export async function createCapabilityRuntime(options) {
             root,
             bridge,
             providers,
+            failures,
             entry: options.kernelEntry ?? resolveKernelEntry(),
             defaultTimeoutMs: options.cellTimeoutMs ?? 30_000,
         });
@@ -69,6 +72,7 @@ export async function createCapabilityRuntime(options) {
         js: (code, runOptions) => kernel.run(code, runOptions),
         jsReset: () => kernel.reset(),
         catalog: () => [...providers.values()],
+        failures: () => [...failures],
         async dispose() {
             if (disposed)
                 return;
@@ -80,10 +84,13 @@ export async function createCapabilityRuntime(options) {
         },
     };
 }
-/** Human-readable connection report, including providers that failed to attach. */
-export function describeProviders(providers) {
-    return providers
-        .map(provider => `${provider.id} (${provider.label}) — ${provider.operations.length} operation(s)`)
-        .join('\n');
+/** Human-readable connection report: what attached, and what did not with its reason. */
+export function describeProviders(providers, failures = []) {
+    return [
+        ...providers.map(provider => `${provider.id} (${provider.label}) — ${provider.operations.length} operation(s)`),
+        // The previous version of this comment claimed it included failures while the body did
+        // not: exactly the silent-absence bug this change is about, in miniature.
+        ...failures.map(failure => `${failure.id} — NOT ATTACHED: ${failure.error}`),
+    ].join('\n');
 }
 //# sourceMappingURL=index.js.map

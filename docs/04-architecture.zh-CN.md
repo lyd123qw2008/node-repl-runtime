@@ -81,7 +81,8 @@ flowchart TD
 当前约定与 DSH MCP 注册行为一致：
 
 - provider 连接失败不会阻止 runtime 启动；
-- 失败 provider 不出现在 `runtime.catalog()`、`cap.list()` 或 `cap.<id>`；
+- 失败 provider 不出现在 `runtime.catalog()`、`cap.list()` 或 `cap.<id>` —— 它们不是能力，没有可调用的东西；
+- 但失败会出现在 `runtime.failures()` 与 `capHelp()` 的失败区，带原因（`<id> — NOT ATTACHED: <error>`）。只列存在的发现面回答不了"cua 去哪了"，实测中一个连接失败的 provider 与一个从未配置过的 provider 完全无法区分；
 - 其他 provider 继续工作；
 - 所有 provider 都失败、全部 provider 都 disabled、或根本没有 provider，都是合法的空 runtime；
 - `disabled` 是连接前的 provider 开关；`include` 是连接后的工具暴露收窄；`inject` 是宿主拥有的调用参数；
