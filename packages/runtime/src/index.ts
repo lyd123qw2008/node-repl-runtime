@@ -16,6 +16,7 @@ import type {
   JsOptions,
   McpProviderSpec,
   ProviderConnection,
+  ProviderFailure,
   RuntimeOptions,
 } from './types.js'
 
@@ -53,12 +54,21 @@ export interface CapabilityRuntime {
   jsReset(): Promise<void>
   /** The projected catalog, for host-side reporting (not a model-facing tool). */
   catalog(): readonly ProviderConnection[]
+  /**
+   * Providers that could not be attached, with their reasons.
+   *
+   * Separate from `catalog()` because they are not capabilities: nothing can be called on
+   * them. They ride into the kernel's config snapshot so `capHelp()` can explain an absence
+   * instead of only listing presences.
+   */
+  failures(): readonly ProviderFailure[]
   dispose(): Promise<void>
 }
 
 export async function createCapabilityRuntime(options: RuntimeOptions): Promise<CapabilityRuntime> {
   const connector = options.connector ?? connectMcpProvider
   const providers = new Map<string, ProviderConnection>()
+  const failures: ProviderFailure[] = []
 
   for (const spec of options.providers) {
     if (spec.disabled === true) continue
@@ -68,10 +78,9 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
       // Match the optional MCP-client startup policy: a provider that will not
       // connect contributes no capabilities, but it must not take the runtime
       // down. Other providers — including none — can still be used.
-      console.warn(
-        `[node-repl-runtime] provider ${spec.id} failed to connect: `
-        + (error instanceof Error ? error.message : String(error)),
-      )
+      const message = error instanceof Error ? error.message : String(error)
+      failures.push({ id: spec.id, error: message })
+      console.warn(`[node-repl-runtime] provider ${spec.id} failed to connect: ${message}`)
     }
   }
   // An empty catalog is a valid runtime state. The face still provides js and
@@ -86,6 +95,7 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
       root,
       bridge,
       providers,
+      failures,
       entry: options.kernelEntry ?? resolveKernelEntry(),
       defaultTimeoutMs: options.cellTimeoutMs ?? 30_000,
     })
@@ -100,6 +110,7 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
     js: (code, runOptions) => kernel.run(code, runOptions),
     jsReset: () => kernel.reset(),
     catalog: () => [...providers.values()],
+    failures: () => [...failures],
     async dispose() {
       if (disposed) return
       disposed = true
@@ -110,11 +121,17 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
   }
 }
 
-/** Human-readable connection report, including providers that failed to attach. */
-export function describeProviders(providers: readonly ProviderConnection[]): string {
-  return providers
-    .map(provider => `${provider.id} (${provider.label}) — ${provider.operations.length} operation(s)`)
-    .join('\n')
+/** Human-readable connection report: what attached, and what did not with its reason. */
+export function describeProviders(
+  providers: readonly ProviderConnection[],
+  failures: readonly ProviderFailure[] = [],
+): string {
+  return [
+    ...providers.map(provider => `${provider.id} (${provider.label}) — ${provider.operations.length} operation(s)`),
+    // The previous version of this comment claimed it included failures while the body did
+    // not: exactly the silent-absence bug this change is about, in miniature.
+    ...failures.map(failure => `${failure.id} — NOT ATTACHED: ${failure.error}`),
+  ].join('\n')
 }
 
 export type { McpProviderSpec, ProviderConnection, JsCellResult, JsOptions }

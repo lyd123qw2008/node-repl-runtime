@@ -165,6 +165,23 @@ export async function connectMcpProvider(spec: McpProviderSpec): Promise<Provide
     { name: 'node-repl-runtime', version: '0.0.0' },
     { versionNegotiation: { mode: 'auto' } },
   )
+  try {
+    return await openProvider(client, spec)
+  } catch (error) {
+    // A server that connects and then fails discovery would otherwise leave its client
+    // running with nothing holding a reference to close it — and for stdio that is an
+    // orphaned child process per attempt. The caller only sees the throw, so the cleanup
+    // has to happen on this side of it.
+    await client.close().catch(() => {})
+    throw error
+  }
+}
+
+/** The connected half: discovery and the call surface, once `client` is connected. */
+async function openProvider(
+  client: Client,
+  spec: McpProviderSpec,
+): Promise<ProviderConnection> {
   if (spec.transport === 'streamable-http') {
     if (spec.url === undefined) throw new Error(`provider ${spec.id}: transport streamable-http requires url`)
     await client.connect(new StreamableHTTPClientTransport(new URL(spec.url)))

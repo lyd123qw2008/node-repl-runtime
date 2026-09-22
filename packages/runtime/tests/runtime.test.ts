@@ -8,10 +8,16 @@
  * is the whole point of the design.
  */
 
+import { readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   applyInjection,
   collectProviderImages,
+  connectMcpProvider,
   createCapabilityRuntime,
   mergeProviderImages,
   projectOperation,
@@ -381,7 +387,7 @@ describe('multi-provider and exposure narrowing', () => {
     }
   }, 120_000)
 
-  it('keeps working when one provider fails to attach', async () => {
+  it('keeps working when one provider fails to attach, and says why it is missing', async () => {
     // A provider that will not connect must not take the runtime down; the model can
     // still work with what did attach. `Object.keys(cap)` lists providers only — the
     // `list`/`describe`/`call` helpers are non-enumerable on purpose.
@@ -399,6 +405,17 @@ describe('multi-provider and exposure narrowing', () => {
       const result = await runtime.js('nodeRepl.write("providers=" + Object.keys(cap).sort().join(","));')
       expect(result.output).toContain('providers=good')
       expect(result.output).not.toContain('bad')
+
+      // The callable surface stays honest — nothing can be called on `bad` — but discovery
+      // has to be able to explain the absence. Without this, a provider that failed to
+      // attach is indistinguishable from one that was never configured, which is exactly
+      // how a working-but-disabled `cua` looked.
+      expect(runtime.failures()).toEqual([{ id: 'bad', error: 'connection refused' }])
+      const help = await runtime.js('nodeRepl.write(capHelp());')
+      expect(help.output).toContain('good (good) — 3 operation(s)')
+      expect(help.output).toContain('bad — NOT ATTACHED: connection refused')
+      const asked = await runtime.js('nodeRepl.write(capHelp("bad"));')
+      expect(asked.output).toContain('bad is configured but not attached: connection refused')
     } finally {
       await runtime.dispose()
     }
@@ -594,4 +611,35 @@ describe('provider image admission (pure)', () => {
     })
     expect(mergeProviderImages(null, collected)).toEqual({ _value: null, _images: [{ mimeType: 'image/png', data: PNG_BASE64 }] })
   })
+})
+
+describe('provider connection cleanup', () => {
+  /** Signal 0 is a presence check: it throws once the pid is gone. */
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  it('reaps a server that connects and then refuses discovery', async () => {
+    const pidFile = join(tmpdir(), `node-repl-fixture-${randomUUID()}.pid`)
+    const fixture = fileURLToPath(new URL('./fixtures/fails-tools-list.mjs', import.meta.url))
+
+    await expect(connectMcpProvider({
+      id: 'fails',
+      transport: 'stdio',
+      command: process.execPath,
+      args: [fixture, pidFile],
+    })).rejects.toThrow(/discovery refused/)
+
+    // Discovery failed *after* the client connected, so nothing else will ever close it.
+    // Without the cleanup on the failing side this child is orphaned — one per startup,
+    // with no reference left anywhere to notice it.
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
+    await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false)
+  }, 60_000)
 })

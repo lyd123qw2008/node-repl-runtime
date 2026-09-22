@@ -26,7 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import type { Bridge } from './bridge.js'
-import type { JsCellBlock, JsCellResult, JsOptions, ProviderConnection } from './types.js'
+import type { JsCellBlock, JsCellResult, JsOptions, ProviderConnection, ProviderFailure } from './types.js'
 
 const BRIDGE_ASSET_DIR = fileURLToPath(new URL('../assets/nr-cap/', import.meta.url))
 
@@ -125,6 +125,8 @@ export async function startKernel(options: {
   root: string
   bridge: Bridge
   providers: ReadonlyMap<string, ProviderConnection>
+  /** Providers that did not attach, so the kernel's help can explain what is missing. */
+  failures: readonly ProviderFailure[]
   entry: string
   defaultTimeoutMs: number
 }): Promise<KernelSession> {
@@ -138,6 +140,9 @@ export async function startKernel(options: {
       label: provider.label,
       operations: provider.operations,
     })),
+    // Not capabilities — nothing can be called on them — but discovery that lists only
+    // presences cannot answer "where is cua?" at all.
+    failures: options.failures,
   }, null, 2)}\n`)
 
   const client = new Client({ name: 'node-repl-runtime', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } })

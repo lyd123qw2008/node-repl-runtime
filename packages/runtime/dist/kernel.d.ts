@@ -18,7 +18,7 @@
  * to prefer `var` for names it may redefine.
  */
 import type { Bridge } from './bridge.js';
-import type { JsCellResult, JsOptions, ProviderConnection } from './types.js';
+import type { JsCellResult, JsOptions, ProviderConnection, ProviderFailure } from './types.js';
 /**
  * Where the kernel child lives. Kept scratch: it holds a generated config, not user data.
  *
@@ -36,6 +36,8 @@ export declare function startKernel(options: {
     root: string;
     bridge: Bridge;
     providers: ReadonlyMap<string, ProviderConnection>;
+    /** Providers that did not attach, so the kernel's help can explain what is missing. */
+    failures: readonly ProviderFailure[];
     entry: string;
     defaultTimeoutMs: number;
 }): Promise<KernelSession>;
