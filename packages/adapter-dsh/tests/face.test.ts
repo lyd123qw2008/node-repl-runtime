@@ -178,6 +178,33 @@ describe('two-tool face', () => {
     expect(rendered[2]!.text).toBe('after')
   })
 
+  it('names each committed image after its media type, and nothing else', async () => {
+    // The name is display metadata: DSH keys storage by content digest, so the only thing
+    // it must not do is contradict the bytes. `title` deliberately does NOT reach it —
+    // deriving names from free model text is a taxonomy nobody asked for.
+    const runtime = fakeRuntime({
+      js: vi.fn(async () => cellResult({
+        durationMs: 5,
+        blocks: [
+          { kind: 'image', data: 'AAAA', mimeType: 'image/png' },
+          { kind: 'image', data: 'BBBB', mimeType: 'image/jpeg' },
+          { kind: 'image', data: 'CCCC', mimeType: 'image/webp' },
+        ],
+        output: '',
+      })),
+    })
+    const { saveImages, store } = storeSpy()
+    const [js] = createNodeReplTools({ runtime, attachments: () => store })
+
+    await asTool(js).execute({ code: 'x', title: 'Screenshot the 3096 sidebar' }, exec())
+
+    expect(saveImages.mock.calls[0]![0]).toEqual([
+      expect.objectContaining({ mediaType: 'image/png', name: 'node-repl.png' }),
+      expect.objectContaining({ mediaType: 'image/jpeg', name: 'node-repl.jpg' }),
+      expect.objectContaining({ mediaType: 'image/webp', name: 'node-repl.webp' }),
+    ])
+  })
+
   it('keeps the cell and names the reason when no attachment store is mounted', async () => {
     const runtime = fakeRuntime({ js: vi.fn(async () => LASTING_CELL) })
     const [js] = createNodeReplTools({ runtime })
