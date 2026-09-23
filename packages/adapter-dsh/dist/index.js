@@ -182,6 +182,33 @@ const cellOutput = {
 function forToolContract(value) {
     return value;
 }
+/** Longest call label before it stops being a label and starts being code. */
+const CELL_TITLE_MAX = 80;
+/**
+ * How one cell renders in a UI: the label the model chose, and the program as detail.
+ *
+ * DSH presents its own `run_code` this way (`description` as the always-visible title, the
+ * program on `rawInput`), and a tool that declares nothing gets the generic fallback, which
+ * shows the raw arguments — a cell then reads as `js · var navA = await cap.playwright...`,
+ * i.e. the first line of code and whatever it happens to contain (URLs, tokens, paths).
+ *
+ * The label is the model's `title` when it gave one; otherwise the code's first non-empty
+ * line, which is what a reader would have picked. Nothing is hidden either way: `rawInput`
+ * carries the whole program, so the detail view is complete and `render` still shows every
+ * line of the code in the result card.
+ */
+function cellCallView(args) {
+    const authored = args.title?.trim();
+    const firstLine = args.code.split('\n').map(line => line.trim()).find(line => line !== '') ?? '';
+    const label = authored === undefined || authored === '' ? firstLine : authored;
+    return {
+        card: 'generic',
+        title: label === '' ? 'js cell'
+            : label.length > CELL_TITLE_MAX ? `${label.slice(0, CELL_TITLE_MAX - 1)}…` : label,
+        kind: 'execute',
+        rawInput: args.code,
+    };
+}
 /** Build the two tool definitions over a runtime. */
 export function createNodeReplTools(host) {
     const jsTool = defineTool({
@@ -189,6 +216,7 @@ export function createNodeReplTools(host) {
         description: JS_TOOL_DESCRIPTION,
         parameters: JS_PARAMETERS,
         output: cellOutput,
+        presentCall: cellCallView,
         // The return type is deliberately inferred: `forToolContract` yields `never`, which is
         // what lets the value satisfy the contract's `JsonValue`; annotating it here would put
         // the unassignable shape back.
@@ -212,6 +240,9 @@ export function createNodeReplTools(host) {
         description: JS_RESET_TOOL_DESCRIPTION,
         parameters: RESET_PARAMETERS,
         output: cellOutput,
+        // A reset has no model-authored label and no program to show; without this it would
+        // render as the raw empty arguments.
+        presentCall: () => ({ card: 'generic', title: 'Reset the kernel', kind: 'execute' }),
         async execute(_args, _exec) {
             await host.runtime.jsReset();
             return forToolContract({

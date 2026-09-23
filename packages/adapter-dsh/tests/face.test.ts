@@ -89,6 +89,28 @@ describe('two-tool face', () => {
     expect(tools.map(tool => tool.name)).toEqual(['js', 'js_reset'])
   })
 
+  it('presents a cell by its title, with the whole program kept as detail', () => {
+    const [js, reset] = createNodeReplTools({ runtime: fakeRuntime() })
+    // The label the model authored, exactly as DSH's own `run_code` presents its
+    // `description`. Without this the UI falls back to the raw arguments, so a cell
+    // reads as `js · var navA = await cap.playwright.browser_navigate({ url: 'http://…'`
+    // — the first 80 characters of code, and whatever secrets it happens to contain.
+    expect(js!.presentCall?.({ code: 'nodeRepl.write(1)', title: 'Read the file' }))
+      .toEqual({ card: 'generic', title: 'Read the file', kind: 'execute', rawInput: 'nodeRepl.write(1)' })
+    // No title: the first non-empty line is still a label; the program is not lost,
+    // it rides `rawInput`.
+    expect(js!.presentCall?.({ code: '\n\nconst x = 1\nconsole.log(x)' }))
+      .toEqual({ card: 'generic', title: 'const x = 1', kind: 'execute', rawInput: '\n\nconst x = 1\nconsole.log(x)' })
+    const long = `const x = '${'a'.repeat(200)}'`
+    const clipped = js!.presentCall?.({ code: long })?.title ?? ''
+    expect(clipped).toHaveLength(80)
+    expect(clipped.endsWith('…')).toBe(true)
+    // A clipped label is still a prefix of the real code, never a rewritten one.
+    expect(long.startsWith(clipped.slice(0, -1))).toBe(true)
+    expect(js!.presentCall?.({ code: '   ' })?.title).toBe('js cell')
+    expect(reset!.presentCall?.({})).toEqual({ card: 'generic', title: 'Reset the kernel', kind: 'execute' })
+  })
+
   it('keeps the declaration cost inside the budget', () => {
     const tools = createNodeReplTools({ runtime: fakeRuntime() })
     const tokens = estimatedToolsTokens(tools)
