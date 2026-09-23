@@ -20,7 +20,7 @@ export const JS_TOOL_DESCRIPTION = [
     '',
     'Statement style: end every top-level statement with an explicit `;`. The kernel injects snapshot code at each statement boundary, so a missing semicolon fails the whole cell with `SyntaxError: Unexpected identifier \'__qwen_repl_..._snapshot\'`; add the `;` and rerun.',
     '',
-    'Runtime rules: top-level `await` works; `await import("package")` works, but top-level static `import` does not; `process` is not available; a cell that overruns its budget is cancelled so the kernel stays usable — earlier bindings normally survive, but a cell that will not stop restarts the kernel and discards them.',
+    'Runtime rules: top-level `await` works; `await import("package")` works, but top-level static `import` does not; `process` is not available; relative paths resolve against the kernel\'s own temporary cwd rather than the session workspace, so write project files with absolute paths; a cell that overruns its budget is cancelled so the kernel stays usable — earlier bindings normally survive, but a cell that will not stop restarts the kernel and discards them.',
     '',
     'Kernel lifetime: bindings live in the kernel process until `js_reset`, so whatever you leave at top level keeps costing memory — null out large values (`r = null`) once you are done with them, especially a `_images` screenshot you no longer need. Do not spawn a detached process from a cell: it outlives the kernel and nothing reaps it. If `cap` is ever undefined, the kernel was replaced (a crash or a kill): call `js_reset` to reinstall the catalog and start clean.',
     '',
