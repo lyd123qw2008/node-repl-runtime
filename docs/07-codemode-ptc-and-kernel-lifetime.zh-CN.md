@@ -3,7 +3,10 @@
 > 这份文档回答三个连在一起的问题：**（1）** 把 Cloudflare 的 Code Mode 搬过来值不值；**（2）** 内核的内存/资源
 > 到底会不会泄漏；**（3）** 如果不用自建内核，DSH 自己的 `run_code`（PTC）能不能顶上。
 > 结论都来自本机实测，不是推断。**结论先行**：泄漏的真实形状是"内核寿命接错对象"，不是"内核漏"；
-> 修法不是调阈值，而是把执行交给 `ctx.ptcRuntime`、我们只保留目录投影那半。
+> 修法不是调阈值，而是把执行**作用域**拨对——本文当时给的具体形态是"交给 `ctx.ptcRuntime`、我们只保留
+> 目录投影那半"，**该形态已于 2026-09-23 回退、并在 2026-09-28 复核后确认不再采用**；
+> 现行作用域与内存决定见 [`docs/06-kernel-boundaries.zh-CN.md`](06-kernel-boundaries.zh-CN.md) 开头那段：
+> **接受进程级作用域、不自动结束、不做 GC、不设天花板，只保留 `x = null` / `js_reset` 两个显式杠杆**。
 
 > **2026-09-23 状态更新 —— 第 6 节那条迁移决定已被回退，本文其余结论不受影响。**
 > `cap_help` / `cap_call` 的能力目录投影随实验一并在 09-23 09:45 从 web profile 移除
@@ -137,6 +140,47 @@ dispose 时终止并等待在飞运行"。子调用经 `tool/ptc-dispatch` 回�
 1. 迁移到 PTC 后，出现"一个程序做十几次工具调用"成为常态而模型仍需要细粒度多轮 → 考虑保留内核作为低延迟交互路径；
 2. 进程中再次出现非本实验制造的孤儿 → 那才是真证据（此时两侧都要修，DSH 侧修 Job Object / breakaway）；
 3. 内核 RSS 或 `getHeapStatus()` 在**没有迁移**的前提下逼近上限 → 届时把会话边界复位做进接线层。
+
+> **2026-09-28 注 —— 上表第 5 行（"执行交给 `ctx.ptcRuntime`，寿命 = 一次程序"）维持回退状态，现行决定另有出处。**
+> 现在已经有了明确的偏好与依据：内核**不自动结束**（DSH 没有可靠的结束信号，定时/空闲回收会静默毁掉
+> 跨 cell 活对象，而浏览器/桌面自动化的价值全在那里），同时**不做 GC、不设 V8 天花板、不按会话分内核**，
+> 只保留显式杠杆（`x = null`、`js_reset`）与按需可见性（`nodeRepl.getHeapStatus()`）。
+> 完整决定、拒做清单、对照实现（Qwen / Codex / Pi / PTC）与可观测扳机见
+> [`docs/06-kernel-boundaries.zh-CN.md`](06-kernel-boundaries.zh-CN.md) 开头那段与 §5、§5.1、§6。
+> 本文第 1–5 节的实测数字与判据不变，仍可作为"为什么每次新隔离不慢、慢的是跨进程"的依据。
+
+> **不迁移 PTC 的第二条理由（2026-09-28，UI/呈现；截图见证据说明）**
+>
+> 第一条理由是能力：PTC 每程序一个受管子进程，**保留不了跨 cell 活对象**（浏览器/桌面自动化的价值所在），
+> 且每次 ~400 ms（§5 实测）。第二条是**呈现**，与性能无关：
+>
+> - **实测形态**：把本仓库的能力目录按 `cap_help` / `cap_call` 投影进 `run_code` 后，同一次"列出 provider
+>   并截图三个站点"的巡检在界面上呈现为——脚本卡片（`rawInput`，带行号）**外面**挂着一串 9 条
+>   `工具调用 · cap_help/cap_call · <第一个参数>` 的清单（`tool/ptc-dispatch-start` / `tool/ptc-dispatch`
+>   是持久会话事件，客户端 `tool-call-tree.ts` 按 `parentCallId` 递归挂成 tree）；
+> - **丢的是流程上下文**：清单里的每一行只有 `name` + `argsRaw`（DSH `packages/core/tools/src/types.ts`
+>   的 `PtcDispatchEventData`），**没有任何指向程序位置的锚点**——没有行号、没有迭代序号、没有与程序自身日志的交错。
+>   于是"读 a11y 树 → 点登录 → 再验一次"的叙事被压成"一块代码 → 一串调用 → 一个结果"；
+> - **只有人受影响**：dispatch 事件是 log-only，`deriveMessages()` 忽略它们，所以模型上下文里没有这些噪音——
+>   噪音纯粹落在人看的界面上，这正是它读起来"莫名其妙"而不是"有用"的原因；
+> - **对照**：同一个巡检改用 `js` 跑，界面是一行 `ok (2517 ms)` + cell 按顺序写出的输出——程序、叙事、结果在
+>   同一个单元里（这也是本仓库 [adapter README](../packages/adapter-dsh/README.md#presentation-program-first)
+>   写成硬约束的**呈现偏好**：**程序本身是主展示，执行痕迹只能挂在程序上，宁可不显示也不要脱离程序的清单**）；
+> - **DSH 侧可修的两处**（都不在我们手里，记录备查）：① `run_code` 的 `presentCall` 里 `title: args.description`
+>   完全依赖模型传 `description`，没有宿主兜底（DSH `packages/core/tools/src/ptc.ts`），不传就退化成裸 `code`；
+>   ② dispatch 清单应锚进程序文本（按行内联/边注）或折叠聚合，而不是卡片外的平铺列表；
+> - **我们侧可做的**（尚未实现）：`nr-cap` 在发起调用时抓一帧 stack，取出 `.qwen_node_repl_cell_<gen>_<execId>.mjs:<line>`
+>   作为源码行号，随调用回传；host 侧放进 **UI-only 的 `presentationMeta`**（与模型可见的 `content` 分离、随会话日志
+>   持久化，`read` 工具即此用法）再经 `presentResult` 渲染成"按源码行锚定的调用清单"——**零模型 token**。
+>   限制：真正"在代码行之间插一行"需要 DSH 端新 card 形态；动态生成的代码行号会偏。
+>
+> **证据**：2026-09-28 的三张截图，只裁出工具区域（原始截图左侧的会话/仓库列表已裁掉），放在
+> [`docs/img/2026-09-28-ptc-dispatch-ui/`](img/2026-09-28-ptc-dispatch-ui/README.md)：
+> [`1-run-code-dispatch-list.png`](img/2026-09-28-ptc-dispatch-ui/1-run-code-dispatch-list.png) 是清单本身（9 条，只有工具名 + 第一个参数）；
+> [`3-run-code-script-card.png`](img/2026-09-28-ptc-dispatch-ui/3-run-code-script-card.png) 是脚本卡片（带行号 + 程序自己的 `输出`），而清单在**卡片外面**。
+> 下面这张是 A/B 对照：同一个"列出 provider 并截图三个站点"的巡检，上面 9 条 `子工具` 行，下面 `js` 一行 `ok (2517 ms)` + 按序输出。
+>
+> ![run_code 的 dispatch 清单与 js 单 cell 的对照](img/2026-09-28-ptc-dispatch-ui/2-run-code-vs-js.png)
 
 ## 7. 证据与复现
 

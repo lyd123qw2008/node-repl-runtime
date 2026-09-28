@@ -86,7 +86,12 @@ flowchart TD
 - 其他 provider 继续工作；
 - 所有 provider 都失败、全部 provider 都 disabled、或根本没有 provider，都是合法的空 runtime；
 - `disabled` 是连接前的 provider 开关；`include` 是连接后的工具暴露收窄；`inject` 是宿主拥有的调用参数；
-- 当前 catalog 在 runtime 启动时安装进 kernel。自动重连和运行中动态替换 catalog 属于后续生命周期能力，不是 provider 配置本身。
+- 会话在运行期失效（服务端重启后忘记 session id、stdio 子进程死亡）由 provider 自己恢复：
+  一次调用检测到会话丢失就 **重连一次 + 重试一次**，catalog 随回包刷新进内核，
+  不必重启 DSH profile；
+- **启动时不可达**的 provider 也不再是一去不返：它的 spec 被保留，`cap.reconnect(id)` 可以在运行期
+  首次接入（`cap.status()` 会以 `attached: false` + 原因列出它）；只有 `disabled: true` 明确拒绝。
+  详见 [`docs/08-mcp-session-recovery.zh-CN.md`](08-mcp-session-recovery.zh-CN.md)。
 
 ## 3. 一次调用的路径
 
