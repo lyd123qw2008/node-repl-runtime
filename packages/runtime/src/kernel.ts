@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url'
 import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import type { Bridge } from './bridge.js'
+import { catalogEntries } from './catalog.js'
 import type { JsCellBlock, JsCellResult, JsOptions, ProviderConnection, ProviderFailure } from './types.js'
 
 const BRIDGE_ASSET_DIR = fileURLToPath(new URL('../assets/nr-cap/', import.meta.url))
@@ -35,6 +36,21 @@ const BRIDGE_ASSET_DIR = fileURLToPath(new URL('../assets/nr-cap/', import.meta.
  * something the runtime has already put back.
  */
 const CATALOG_RESTORED_NOTICE = '[node_repl kernel was replaced: bindings lost, capability catalog reinstalled]'
+
+/**
+ * What a cell that lost its kernel is told about the catalog.
+ *
+ * The failure branch is the point. `crashed` already says the cell died, but a catalog that
+ * could not be put back leaves every later cell answering `cap is not defined` with no
+ * explanation — and the previous version of this code swallowed exactly that error, which is
+ * the one case where saying nothing costs the most. Exported because the notice is a pure
+ * function of the failure, like the other projections this runtime asserts directly.
+ */
+export function catalogRecoveryNotice(failure: string | undefined): string {
+  return failure === undefined
+    ? CATALOG_RESTORED_NOTICE
+    : `[node_repl kernel was replaced and the capability catalog could not be reinstalled: ${failure}]`
+}
 
 /**
  * The MCP stdio client deliberately starts children with a small safe environment.
@@ -141,11 +157,10 @@ export async function startKernel(options: {
     host: options.bridge.host,
     port: options.bridge.port,
     token: options.bridge.token,
-    providers: [...options.providers.values()].map(provider => ({
-      id: provider.id,
-      label: provider.label,
-      operations: provider.operations,
-    })),
+    // One shape, built in one place: the same `providers` array a later `cap.refresh()`
+    // receives, so a rebuilt session refreshes the kernel's namespaces exactly the way the
+    // snapshot created them.
+    providers: catalogEntries(options.providers.values()),
     // Not capabilities — nothing can be called on them — but discovery that lists only
     // presences cannot answer "where is cua?" at all.
     failures: options.failures,
@@ -263,14 +278,17 @@ export async function startKernel(options: {
   const recoverCatalog = async (result: JsCellResult): Promise<JsCellResult> => {
     if (recovering) return result
     recovering = true
+    let failure: string | undefined
     try {
       await install()
-    } catch {
-      return result
+    } catch (error) {
+      // Reported, not swallowed: the model is about to find a kernel with no `cap`, and the
+      // reason is the only thing that distinguishes "retry" from "this runtime is unusable".
+      failure = error instanceof Error ? error.message : String(error)
     } finally {
       recovering = false
     }
-    const blocks = [...result.blocks, { kind: 'text', text: CATALOG_RESTORED_NOTICE } as const]
+    const blocks = [...result.blocks, { kind: 'text', text: catalogRecoveryNotice(failure) } as const]
     return { ...result, blocks, output: textOf(blocks).trimEnd() }
   }
 
@@ -347,12 +365,21 @@ export async function startKernel(options: {
    * The assignments must happen in the CELL, not inside the imported module: an
    * imported module runs on the module global, so a `globalThis` side effect set there
    * is invisible to cell code.
+   *
+   * The refresh is what keeps a *replaced* kernel honest. `nr-cap` reads `config.json` when it
+   * is first imported, and that file was written when this runtime started — but a kernel
+   * process that died and came back imports the module afresh, so without this it would
+   * advertise the startup catalog while the host serves a different one (a provider attached
+   * after startup, or a tool list that changed when a session was rebuilt). Best effort: if the
+   * host cannot answer, the snapshot stays the view rather than the catalog failing to install,
+   * and `cap.status()` is how to see the difference.
    */
   const install = async (): Promise<void> => {
     const result = await session.run(
       "const mod = await import('nr-cap');\n"
       + 'globalThis.cap = mod.cap;\n'
       + 'globalThis.capHelp = mod.capHelp;\n'
+      + 'try { await cap.refresh(); } catch (error) { nodeRepl.write("catalog left on the startup snapshot: " + error.message + "\\n"); }\n'
       + "nodeRepl.write('cap ready: ' + cap.list().map(p => p.id + '=' + p.operations).join(','));",
       { timeoutMs: 60_000, title: 'install capability catalog' },
     )

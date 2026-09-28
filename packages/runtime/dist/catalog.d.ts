@@ -10,7 +10,7 @@
  *   1. `inject` keys are removed from the model-visible schema;
  *   2. `include` optionally narrows which tools are exposed at all.
  */
-import type { McpProviderSpec, ProjectedOperation, ProviderConnection } from './types.js';
+import type { CatalogEntry, McpProviderSpec, ProjectedOperation, ProviderConnection, ProviderHealth } from './types.js';
 interface ListedTool {
     readonly name: string;
     readonly description?: string;
@@ -81,7 +81,54 @@ export declare function collectProviderImages(content: unknown): ProviderImages;
  * so every provider that never returns pixels sees a byte-identical result.
  */
 export declare function mergeProviderImages(value: unknown, collected: ProviderImages): unknown;
-/** Open one MCP session. Nothing is cached or persisted: the surface is live. */
+/**
+ * Whether an error means the session the client is holding is gone.
+ *
+ * Measured against SDK 2.0, because the obvious reading is wrong: the streamable-HTTP
+ * transport reports *every* non-OK POST as the same `SdkHttpError` code
+ * (`CLIENT_HTTP_NOT_IMPLEMENTED`), so the code says nothing and the HTTP status is the only
+ * signal available. The MCP spec has a server answer `404` for a session it does not know,
+ * and that is exactly what IDEA does after a restart — "Streamable HTTP session not found".
+ *
+ * Two other endings belong to the same class, and each is safe to retry because nothing was
+ * delivered:
+ *
+ *   - the transport is gone (`NOT_CONNECTED`/`CONNECTION_CLOSED`: a closed SSE stream, a dead
+ *     stdio child), which the SDK reports as its own codes;
+ *   - the request never completed at all, which undici reports as `TypeError: fetch failed`
+ *     with the real errno hidden on `cause`. This is what a call made while the IDE is still
+ *     coming back up looks like, and recovering from it needs no more than the retry below.
+ *
+ * A tool that failed *on the server* is deliberately not in this set: it answers with a
+ * result, not with a transport error, and retrying it would repeat a side effect.
+ */
+export declare function isSessionLoss(error: unknown): boolean;
+/**
+ * The catalog as the kernel receives it.
+ *
+ * One builder for both directions — the snapshot written before the kernel starts, and the
+ * refresh that follows a rebuilt session — because a drift between them would be invisible
+ * until a restart, which is precisely the class of bug this file just grew a fix for.
+ */
+export declare function catalogEntries(providers: Iterable<ProviderConnection>): readonly CatalogEntry[];
+/**
+ * Health for a connection, including one that owns no session.
+ *
+ * A connection without a `session` is not unhealthy — it simply has nothing to re-open, and
+ * `reconnectable: false` is how a caller can tell that apart from a provider whose session is
+ * currently down. Reporting it at all (rather than omitting it) keeps `cap.status()` a complete
+ * picture of the catalog, which is what makes an absence explicable.
+ */
+export declare function providerHealth(provider: ProviderConnection): ProviderHealth;
+/**
+ * Health for a provider that is configured but not attached.
+ *
+ * Synthesized from the spec rather than from a connection, because there is no connection —
+ * that is the whole point. It is what lets `cap.status()` answer "where is idea?" with a reason
+ * instead of an absence, and `reconnectable: true` is a promise the attach path has to keep.
+ */
+export declare function unattachedHealth(spec: McpProviderSpec, error: string): ProviderHealth;
+/** Open one MCP session, with the recovery a long-lived host needs. Nothing is persisted. */
 export declare function connectMcpProvider(spec: McpProviderSpec): Promise<ProviderConnection>;
 export {};
 //# sourceMappingURL=catalog.d.ts.map

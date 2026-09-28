@@ -9,8 +9,38 @@
  * Loopback + random port + random token, because this channel is only reachable from
  * the kernel child process we started. It is not a security boundary between mutually
  * distrusting parties and is not presented as one.
+ *
+ * Three request kinds, and the third is what keeps a long-lived kernel honest:
+ *
+ *   - `call` — one MCP call, plus a catalog *if the call had to rebuild its session*;
+ *   - `catalog` — the live catalog and health, for `cap.refresh()` (discovery is answered
+ *     from the kernel's own snapshot otherwise, so exploring the surface costs no round trip);
+ *   - `reconnect` — re-open one provider's session, optionally against a new endpoint.
+ *
+ * The catalog rides on a call reply rather than being pushed at the kernel: the kernel has
+ * one socket and asks for nothing it did not ask for, and a session that was rebuilt is
+ * exactly the moment its stale operation list would otherwise start lying.
  */
-import type { ProviderConnection } from './types.js';
+import type { ProviderConnection, UnattachedProvider } from './types.js';
+export interface BridgeOptions {
+    /**
+     * Providers that are configured but not attached, in both shapes the payload needs.
+     *
+     * A reader rather than a snapshot: whether a provider is attached changes while this bridge
+     * lives, and a list captured at startup would be exactly the stale answer this bridge exists
+     * to avoid. One hook rather than two so the failure and its health cannot disagree.
+     */
+    readonly unattached?: () => readonly UnattachedProvider[];
+    /**
+     * Connect a configured provider that is not attached, by id.
+     *
+     * The half of recovery a restart used to be needed for: when the host starts before its MCP
+     * server does (an IDE still closed), nothing else can bring that provider in — the connection
+     * that a reconnect would re-open never existed. `url` is the same endpoint override a
+     * reconnect takes, applied to the first connect instead.
+     */
+    readonly attach?: (id: string, url?: string) => Promise<ProviderConnection>;
+}
 export interface Bridge {
     readonly host: string;
     readonly port: number;
@@ -28,5 +58,5 @@ export interface Bridge {
     abandonInFlight(reason: string): void;
     close(): Promise<void>;
 }
-export declare function startBridge(providers: ReadonlyMap<string, ProviderConnection>): Promise<Bridge>;
+export declare function startBridge(providers: ReadonlyMap<string, ProviderConnection>, options?: BridgeOptions): Promise<Bridge>;
 //# sourceMappingURL=bridge.d.ts.map

@@ -20,6 +20,16 @@
 import type { Bridge } from './bridge.js';
 import type { JsCellResult, JsOptions, ProviderConnection, ProviderFailure } from './types.js';
 /**
+ * What a cell that lost its kernel is told about the catalog.
+ *
+ * The failure branch is the point. `crashed` already says the cell died, but a catalog that
+ * could not be put back leaves every later cell answering `cap is not defined` with no
+ * explanation — and the previous version of this code swallowed exactly that error, which is
+ * the one case where saying nothing costs the most. Exported because the notice is a pure
+ * function of the failure, like the other projections this runtime asserts directly.
+ */
+export declare function catalogRecoveryNotice(failure: string | undefined): string;
+/**
  * Where the kernel child lives. Kept scratch: it holds a generated config, not user data.
  *
  * The name is a UUID rather than a timestamp: two runtimes created in the same

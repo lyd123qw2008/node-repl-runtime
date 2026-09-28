@@ -10,7 +10,7 @@
  *   1. `inject` keys are removed from the model-visible schema;
  *   2. `include` optionally narrows which tools are exposed at all.
  */
-import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { Client, SdkErrorCode, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 /** Project one advertised tool into a model-visible operation. */
 export function projectOperation(tool, spec) {
@@ -131,47 +131,236 @@ export function mergeProviderImages(value, collected) {
     }
     return { _value: value, ...extras };
 }
-/** Open one MCP session. Nothing is cached or persisted: the surface is live. */
-export async function connectMcpProvider(spec) {
+/**
+ * Whether an error means the session the client is holding is gone.
+ *
+ * Measured against SDK 2.0, because the obvious reading is wrong: the streamable-HTTP
+ * transport reports *every* non-OK POST as the same `SdkHttpError` code
+ * (`CLIENT_HTTP_NOT_IMPLEMENTED`), so the code says nothing and the HTTP status is the only
+ * signal available. The MCP spec has a server answer `404` for a session it does not know,
+ * and that is exactly what IDEA does after a restart — "Streamable HTTP session not found".
+ *
+ * Two other endings belong to the same class, and each is safe to retry because nothing was
+ * delivered:
+ *
+ *   - the transport is gone (`NOT_CONNECTED`/`CONNECTION_CLOSED`: a closed SSE stream, a dead
+ *     stdio child), which the SDK reports as its own codes;
+ *   - the request never completed at all, which undici reports as `TypeError: fetch failed`
+ *     with the real errno hidden on `cause`. This is what a call made while the IDE is still
+ *     coming back up looks like, and recovering from it needs no more than the retry below.
+ *
+ * A tool that failed *on the server* is deliberately not in this set: it answers with a
+ * result, not with a transport error, and retrying it would repeat a side effect.
+ */
+export function isSessionLoss(error) {
+    if (error === null || typeof error !== 'object')
+        return false;
+    const { status, code } = error;
+    if (status === 404)
+        return true;
+    if (code === SdkErrorCode.NotConnected || code === SdkErrorCode.ConnectionClosed)
+        return true;
+    return error instanceof TypeError && error.message === 'fetch failed';
+}
+/** One line about a failure, for a message that has to carry two of them. */
+function describe(error) {
+    return error instanceof Error ? error.message : String(error);
+}
+/** What the server advertises now, projected into model-visible operations. */
+async function discoverOperations(client, spec) {
+    const listed = await client.listTools(undefined, { timeout: 60_000, cacheMode: 'refresh' });
+    return selectTools(listed.tools, spec).map(tool => projectOperation(tool, spec));
+}
+/**
+ * The catalog as the kernel receives it.
+ *
+ * One builder for both directions — the snapshot written before the kernel starts, and the
+ * refresh that follows a rebuilt session — because a drift between them would be invisible
+ * until a restart, which is precisely the class of bug this file just grew a fix for.
+ */
+export function catalogEntries(providers) {
+    return [...providers].map(provider => ({
+        id: provider.id,
+        label: provider.label,
+        operations: provider.operations,
+    }));
+}
+/**
+ * Health for a connection, including one that owns no session.
+ *
+ * A connection without a `session` is not unhealthy — it simply has nothing to re-open, and
+ * `reconnectable: false` is how a caller can tell that apart from a provider whose session is
+ * currently down. Reporting it at all (rather than omitting it) keeps `cap.status()` a complete
+ * picture of the catalog, which is what makes an absence explicable.
+ */
+export function providerHealth(provider) {
+    return provider.session?.health() ?? {
+        id: provider.id,
+        label: provider.label,
+        state: 'connected',
+        attached: true,
+        reconnectable: false,
+        operations: provider.operations.length,
+        generation: 0,
+        reconnects: 0,
+    };
+}
+/**
+ * Health for a provider that is configured but not attached.
+ *
+ * Synthesized from the spec rather than from a connection, because there is no connection —
+ * that is the whole point. It is what lets `cap.status()` answer "where is idea?" with a reason
+ * instead of an absence, and `reconnectable: true` is a promise the attach path has to keep.
+ */
+export function unattachedHealth(spec, error) {
+    return {
+        id: spec.id,
+        label: spec.label ?? spec.id,
+        state: 'failed',
+        attached: false,
+        reconnectable: true,
+        operations: 0,
+        generation: 0,
+        reconnects: 0,
+        lastError: error,
+        ...spec.url === undefined ? {} : { url: spec.url },
+    };
+}
+/**
+ * Connect one client, and reap it if it cannot be used.
+ *
+ * A server that connects and then fails discovery would otherwise leave its client running with
+ * nothing holding a reference to close it — and for stdio that is an orphaned child process per
+ * attempt. The caller only sees the throw, so the cleanup has to happen on this side of it.
+ */
+async function openClient(spec, url) {
     const client = new Client({ name: 'node-repl-runtime', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } });
     try {
-        return await openProvider(client, spec);
+        if (spec.transport === 'streamable-http') {
+            if (url === undefined)
+                throw new Error(`provider ${spec.id}: transport streamable-http requires url`);
+            await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+        }
+        else {
+            if (spec.command === undefined)
+                throw new Error(`provider ${spec.id}: transport stdio requires command`);
+            await client.connect(new StdioClientTransport({
+                command: spec.command,
+                args: [...(spec.args ?? [])],
+                ...spec.cwd === undefined ? {} : { cwd: spec.cwd },
+                ...spec.env === undefined ? {} : { env: { ...spec.env } },
+            }));
+        }
+        return client;
     }
     catch (error) {
-        // A server that connects and then fails discovery would otherwise leave its client
-        // running with nothing holding a reference to close it — and for stdio that is an
-        // orphaned child process per attempt. The caller only sees the throw, so the cleanup
-        // has to happen on this side of it.
         await client.close().catch(() => { });
         throw error;
     }
 }
-/** The connected half: discovery and the call surface, once `client` is connected. */
-async function openProvider(client, spec) {
-    if (spec.transport === 'streamable-http') {
-        if (spec.url === undefined)
+/** Open one MCP session, with the recovery a long-lived host needs. Nothing is persisted. */
+export async function connectMcpProvider(spec) {
+    const live = {
+        spec,
+        url: spec.url,
+        client: undefined,
+        operations: [],
+        generation: 0,
+        reconnects: 0,
+        state: 'connected',
+        lastError: undefined,
+        pending: undefined,
+        closed: false,
+    };
+    /** Connect and discover as one unit: a client without a catalog is not a session yet. */
+    const establish = async (url) => {
+        const client = await openClient(spec, url);
+        try {
+            return { client, operations: await discoverOperations(client, spec) };
+        }
+        catch (error) {
+            await client.close().catch(() => { });
+            throw error;
+        }
+    };
+    /**
+     * The re-open itself, without the single-flight wrapper.
+     *
+     * Deliberately closes the old client *before* opening the new one. For stdio the old child
+     * must die or every reconnect leaks one, and for HTTP the old session is dead by definition —
+     * this path only runs once the client has been told so. Validation happens before the close,
+     * so a bad `url` override cannot cost a session that still works.
+     */
+    const reopen = async (options) => {
+        if (live.closed)
+            throw new Error(`provider ${spec.id} is closed`);
+        const url = options?.url ?? live.url;
+        if (spec.transport === 'streamable-http' && url === undefined) {
             throw new Error(`provider ${spec.id}: transport streamable-http requires url`);
-        await client.connect(new StreamableHTTPClientTransport(new URL(spec.url)));
-    }
-    else {
-        if (spec.command === undefined)
+        }
+        if (spec.transport === 'stdio' && spec.command === undefined) {
             throw new Error(`provider ${spec.id}: transport stdio requires command`);
-        await client.connect(new StdioClientTransport({
-            command: spec.command,
-            args: [...(spec.args ?? [])],
-            ...spec.cwd === undefined ? {} : { cwd: spec.cwd },
-            ...spec.env === undefined ? {} : { env: { ...spec.env } },
-        }));
-    }
-    const listed = await client.listTools(undefined, { timeout: 60_000, cacheMode: 'refresh' });
-    const operations = selectTools(listed.tools, spec).map(tool => projectOperation(tool, spec));
-    const injected = spec.inject ?? {};
-    return {
+        }
+        live.state = 'reconnecting';
+        const previous = live.client;
+        live.client = undefined;
+        if (previous !== undefined)
+            await previous.close().catch(() => { });
+        try {
+            const opened = await establish(url);
+            // Disposal can land mid-reconnect: this process is going away, so the session that was
+            // just opened must be reaped here or it outlives the runtime — for stdio, as a child.
+            if (live.closed) {
+                await opened.client.close().catch(() => { });
+                throw new Error(`provider ${spec.id} is closed`);
+            }
+            // Published together, so a caller never observes a new client whose catalog belongs to
+            // the old session.
+            live.client = opened.client;
+            live.operations = opened.operations;
+            live.url = url;
+            live.generation += 1;
+            live.reconnects += 1;
+            live.state = 'connected';
+            live.lastError = undefined;
+        }
+        catch (error) {
+            live.state = 'failed';
+            live.lastError = describe(error);
+            throw error;
+        }
+    };
+    const reconnect = (options) => {
+        if (live.pending !== undefined)
+            return live.pending;
+        const attempt = reopen(options).finally(() => {
+            if (live.pending === attempt)
+                live.pending = undefined;
+        });
+        live.pending = attempt;
+        return attempt;
+    };
+    const health = () => ({
         id: spec.id,
         label: spec.label ?? spec.id,
-        operations,
-        async call(operation, args, signal) {
-            const result = await client.callTool({ name: operation, arguments: applyInjection(injected, args) }, 
+        state: live.state,
+        attached: true,
+        reconnectable: true,
+        operations: live.operations.length,
+        generation: live.generation,
+        reconnects: live.reconnects,
+        ...live.lastError === undefined ? {} : { lastError: live.lastError },
+        ...live.url === undefined ? {} : { url: live.url },
+    });
+    const call = async (operation, args, signal) => {
+        // Refusing a caller-supplied host-owned argument happens before anything is opened or sent:
+        // it is a bug in the cell, not in the provider's session.
+        const withInjected = applyInjection(spec.inject ?? {}, args);
+        const invoke = async () => {
+            const client = live.client;
+            if (client === undefined)
+                throw new Error(`provider ${spec.id} has no open session`);
+            const result = await client.callTool({ name: operation, arguments: withInjected }, 
             // Aborting this request sends the MCP cancellation notification, so a provider
             // that supports it can stop the work instead of finishing it for nobody.
             { timeout: 300_000, ...signal === undefined ? {} : { signal } });
@@ -189,9 +378,57 @@ async function openProvider(client, spec) {
             // them entirely (they ride in a separate image content block).
             const value = result.structuredContent ?? result.content ?? null;
             return mergeProviderImages(value, collectProviderImages(result.content));
+        };
+        // A previous re-open failed and left no session. Try again before reporting a missing
+        // session as if the provider had never been connected.
+        if (live.client === undefined)
+            await reconnect();
+        try {
+            return await invoke();
+        }
+        catch (error) {
+            // An aborted call is the caller's own doing, not a lost session: nothing can read the
+            // answer, so re-sending the request would be work done for nobody.
+            if (signal?.aborted === true || !isSessionLoss(error))
+                throw error;
+            const lost = error;
+            try {
+                await reconnect();
+            }
+            catch (reconnectError) {
+                // Both facts matter and neither is optional: the session was lost, and the provider
+                // would not come back. A message naming only one of them sends the reader to the wrong
+                // place — "session not found" alone reads as a client bug when the real news is that
+                // nothing is listening.
+                throw new Error(`provider ${spec.id}: ${describe(lost)} (reconnecting did not help: ${describe(reconnectError)})`);
+            }
+            // Exactly one retry, on the fresh session. A second failure is reported as it stands:
+            // retrying a non-idempotent tool more than once is how one side effect becomes three.
+            return await invoke();
+        }
+    };
+    const opened = await establish(live.url);
+    live.client = opened.client;
+    live.operations = opened.operations;
+    live.generation = 1;
+    return {
+        id: spec.id,
+        label: spec.label ?? spec.id,
+        get operations() {
+            return live.operations;
         },
+        session: {
+            health,
+            async reconnect(options) {
+                await reconnect(options);
+                return health();
+            },
+        },
+        call,
         async close() {
-            await client.close().catch(() => { });
+            live.closed = true;
+            await live.client?.close().catch(() => { });
+            live.client = undefined;
         },
     };
 }

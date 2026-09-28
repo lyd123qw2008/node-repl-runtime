@@ -17,6 +17,10 @@
  *   costs no round trip. Only `call` crosses the bridge.
  * - **Errors arrive as ordinary thrown `Error`s** carrying a stable `code`, so a
  *   cell can `try`/`catch` them like any other JavaScript failure.
+ * - **The namespaces are rebuilt in place** when the host says the catalog changed.
+ *   A provider whose server restarted is re-opened on the host, and a call reply that
+ *   carries the refreshed catalog updates `cap.<provider>` before the cell reads it —
+ *   otherwise `cap.list()` would keep advertising a tool list from a dead session.
  */
 
 import { readFileSync } from 'node:fs'
@@ -58,6 +62,10 @@ function ensureSocket() {
       const waiter = pending.get(reply.id)
       if (waiter === undefined) continue
       pending.delete(reply.id)
+      // A call whose session had to be rebuilt comes back with the catalog that replaced the
+      // one this module was imported with. Applying it here — before the caller resumes — is
+      // what makes the recovery visible to the very next statement in the same cell.
+      if (reply.catalog !== undefined) applyCatalog(reply.catalog)
       if (reply.ok === true) {
         waiter.resolve(reply.value)
       } else {
@@ -85,7 +93,24 @@ function request(payload) {
   })
 }
 
-const providers = new Map(config.providers.map(provider => [provider.id, provider]))
+/**
+ * The catalog as this module currently believes it, rebuilt whenever the host says so.
+ *
+ * Deliberately mutable module state rather than a fresh import: the kernel caches ES modules
+ * for the life of the process, so `await import('nr-cap')` after a reset hands back *this*
+ * instance with its old snapshot. Rebuilding in place is therefore the only way a long-lived
+ * kernel can be told that a provider's surface changed.
+ */
+let providers = new Map()
+/**
+ * Providers that failed to attach, keyed by id, from the same snapshot as the catalog.
+ *
+ * Not capabilities — nothing can be called on them — but a discovery surface that lists
+ * only presences cannot answer "where is cua?" at all, which is exactly what it did when
+ * this was measured. Only the on-disk snapshot carries them: a provider's attachment cannot
+ * change while the host process lives, so no refresh ever has to report one.
+ */
+let failures = new Map()
 
 /** Namespaces per provider: `cap.<provider>.<operation>(args)`. */
 const cap = {}
@@ -101,7 +126,7 @@ function defineHelper(target, name, value) {
   Object.defineProperty(target, name, { value, enumerable: false, configurable: true, writable: true })
 }
 
-defineHelper(cap, 'list', () => config.providers.map(provider => ({
+defineHelper(cap, 'list', () => [...providers.values()].map(provider => ({
   id: provider.id,
   label: provider.label,
   operations: provider.operations.length,
@@ -118,7 +143,51 @@ defineHelper(cap, 'describe', name => {
 
 defineHelper(cap, 'call', (name, args = {}) => request({ kind: 'call', name, args }))
 
-for (const provider of config.providers) {
+/**
+ * Ask the host what the catalog is *now*, and rebuild this module's view from the answer.
+ *
+ * A round trip on purpose: the alternative — trusting the snapshot on disk — cannot see a
+ * session that was rebuilt after the snapshot was written. `cap.list()` stays local and
+ * synchronous, so ordinary discovery still costs nothing; this is the explicit refresh.
+ */
+defineHelper(cap, 'refresh', async () => {
+  const live = await request({ kind: 'catalog' })
+  applyCatalog(live)
+  return cap.list()
+})
+
+/**
+ * Live per-provider health, including why a provider is currently down.
+ *
+ * Also lists providers that were configured but never attached (`attached: false`, with the
+ * reason), so "where is idea?" has an answer even when this process started before the IDE did.
+ */
+defineHelper(cap, 'status', async () => {
+  const live = await request({ kind: 'catalog' })
+  applyCatalog(live)
+  return live.health
+})
+
+/**
+ * Make one provider usable again: re-open its session, or connect it for the first time.
+ *
+ * One verb for both halves on purpose. A caller with an unusable provider wants the same thing
+ * either way, and making it tell "never attached" from "session lost" would only be a worse API
+ * for a distinction it does not act on. `options.url` moves the endpoint at the same time.
+ */
+defineHelper(cap, 'reconnect', async (id, options = {}) => {
+  const live = await request({
+    kind: 'reconnect',
+    name: String(id),
+    ...options.url === undefined ? {} : { url: String(options.url) },
+  })
+  applyCatalog(live)
+  const health = live.health.find(candidate => candidate.id === String(id))
+  if (health === undefined) throw new Error(`provider ${id} reported no health after reconnecting`)
+  return health
+})
+
+function namespaceFor(provider) {
   const namespace = {}
   for (const operation of provider.operations) {
     namespace[operation.name] = (args = {}) => request({
@@ -137,17 +206,28 @@ for (const provider of config.providers) {
     if (found === undefined) throw new Error(`unknown operation ${provider.id}.${operation}`)
     return found
   }
-  cap[provider.id] = namespace
+  return namespace
 }
 
 /**
- * Providers that failed to attach, keyed by id, from the same snapshot as the catalog.
+ * Replace what this module believes about the catalog.
  *
- * Not capabilities — nothing can be called on them — but a discovery surface that lists
- * only presences cannot answer "where is cua?" at all, which is exactly what it did when
- * this was measured.
+ * Two callers, one shape: this module's own import (the `config.json` snapshot, which also
+ * carries the providers that failed to attach) and a reply from the host (`providers` plus
+ * `health`, after a session was rebuilt). `failures` is only present in the first, so an
+ * absent list leaves the known failures alone rather than reporting that nothing ever failed.
  */
-const failures = new Map((config.failures ?? []).map(failure => [failure.id, failure.error]))
+function applyCatalog(catalog) {
+  providers = new Map((catalog.providers ?? []).map(provider => [provider.id, provider]))
+  if (catalog.failures !== undefined) {
+    failures = new Map(catalog.failures.map(failure => [failure.id, failure.error]))
+  }
+  // Providers are the only enumerable own properties, so the helpers survive this.
+  for (const key of Object.keys(cap)) delete cap[key]
+  for (const provider of providers.values()) cap[provider.id] = namespaceFor(provider)
+}
+
+applyCatalog(config)
 
 /**
  * Compact human-readable catalog, so discovery does not require the caller to know

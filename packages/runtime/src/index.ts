@@ -9,7 +9,7 @@
 
 import { fileURLToPath } from 'node:url'
 import { startBridge } from './bridge.js'
-import { connectMcpProvider } from './catalog.js'
+import { connectMcpProvider, unattachedHealth } from './catalog.js'
 import { createKernelRoot, startKernel } from './kernel.js'
 import type {
   JsCellResult,
@@ -18,10 +18,21 @@ import type {
   ProviderConnection,
   ProviderFailure,
   RuntimeOptions,
+  UnattachedProvider,
 } from './types.js'
 
 export * from './types.js'
-export { applyInjection, projectOperation, selectTools, connectMcpProvider } from './catalog.js'
+export {
+  applyInjection,
+  catalogEntries,
+  connectMcpProvider,
+  isSessionLoss,
+  projectOperation,
+  providerHealth,
+  selectTools,
+  unattachedHealth,
+} from './catalog.js'
+export { catalogRecoveryNotice } from './kernel.js'
 // Pure functions of one provider reply, so they are asserted directly instead of through a
 // CONNECTED server — the same reason `projectOperation` and `selectTools` are exported.
 export {
@@ -59,7 +70,8 @@ export interface CapabilityRuntime {
    *
    * Separate from `catalog()` because they are not capabilities: nothing can be called on
    * them. They ride into the kernel's config snapshot so `capHelp()` can explain an absence
-   * instead of only listing presences.
+   * instead of only listing presences — and `cap.reconnect()` is how one stops being a failure
+   * without restarting the host process.
    */
   failures(): readonly ProviderFailure[]
   dispose(): Promise<void>
@@ -68,25 +80,83 @@ export interface CapabilityRuntime {
 export async function createCapabilityRuntime(options: RuntimeOptions): Promise<CapabilityRuntime> {
   const connector = options.connector ?? connectMcpProvider
   const providers = new Map<string, ProviderConnection>()
-  const failures: ProviderFailure[] = []
+  /**
+   * Every configured provider that is *not* attached, keyed by id, with its spec and latest
+   * reason.
+   *
+   * A map rather than an array because attaching replaces the reason rather than adding a second
+   * one: "it failed at startup" and "it failed again just now" are one fact that has changed. The
+   * spec is kept here because it is the only thing that makes a later attach possible at all.
+   */
+  const unattached = new Map<string, { spec: McpProviderSpec; error: string }>()
+  /**
+   * Providers the operator switched off.
+   *
+   * Tracked separately from `unattached` and never attachable: "disabled" means the server must
+   * not be started, so a reconnect that started it anyway would be the runtime overruling the
+   * person who wrote the profile.
+   */
+  const disabled = new Set<string>()
+  /** Attach attempts in flight, so concurrent callers share one connection instead of racing. */
+  const attaching = new Map<string, Promise<ProviderConnection>>()
+
+  const connect = async (spec: McpProviderSpec): Promise<ProviderConnection> => {
+    const connection = await connector(spec)
+    providers.set(spec.id, connection)
+    unattached.delete(spec.id)
+    return connection
+  }
+
+  const attach = async (id: string, url?: string): Promise<ProviderConnection> => {
+    const pending = attaching.get(id)
+    if (pending !== undefined) return pending
+    const entry = unattached.get(id)
+    if (entry === undefined) {
+      throw new Error(disabled.has(id)
+        ? `provider ${id} is configured with disabled: true`
+        : `unknown provider ${id}`)
+    }
+    // The endpoint override is applied to the *first* connect rather than followed by a second
+    // one: an IDE that came back on a different port needs exactly one session, not two.
+    const spec = url === undefined ? entry.spec : { ...entry.spec, url }
+    const attempt = connect(spec)
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error)
+        unattached.set(id, { spec: entry.spec, error: message })
+        console.warn(`[node-repl-runtime] provider ${id} could not be attached: ${message}`)
+        throw error
+      })
+      .finally(() => { attaching.delete(id) })
+    attaching.set(id, attempt)
+    return attempt
+  }
 
   for (const spec of options.providers) {
-    if (spec.disabled === true) continue
+    if (spec.disabled === true) {
+      disabled.add(spec.id)
+      continue
+    }
     try {
-      providers.set(spec.id, await connector(spec))
+      await connect(spec)
     } catch (error) {
       // Match the optional MCP-client startup policy: a provider that will not
       // connect contributes no capabilities, but it must not take the runtime
       // down. Other providers — including none — can still be used.
       const message = error instanceof Error ? error.message : String(error)
-      failures.push({ id: spec.id, error: message })
+      unattached.set(spec.id, { spec, error: message })
       console.warn(`[node-repl-runtime] provider ${spec.id} failed to connect: ${message}`)
     }
   }
   // An empty catalog is a valid runtime state. The face still provides js and
   // js_reset, while cap.list() simply reports no connected capabilities.
 
-  const bridge = await startBridge(providers)
+  const unattachedProviders = (): readonly UnattachedProvider[] => [...unattached.values()]
+    .map(entry => ({
+      failure: { id: entry.spec.id, error: entry.error },
+      health: unattachedHealth(entry.spec, entry.error),
+    }))
+
+  const bridge = await startBridge(providers, { unattached: unattachedProviders, attach })
   const root = options.kernelRoot ?? createKernelRoot()
 
   let kernel
@@ -95,7 +165,7 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
       root,
       bridge,
       providers,
-      failures,
+      failures: unattachedProviders().map(entry => entry.failure),
       entry: options.kernelEntry ?? resolveKernelEntry(),
       defaultTimeoutMs: options.cellTimeoutMs ?? 30_000,
     })
@@ -110,7 +180,7 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
     js: (code, runOptions) => kernel.run(code, runOptions),
     jsReset: () => kernel.reset(),
     catalog: () => [...providers.values()],
-    failures: () => [...failures],
+    failures: () => unattachedProviders().map(entry => entry.failure),
     async dispose() {
       if (disposed) return
       disposed = true

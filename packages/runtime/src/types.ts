@@ -53,10 +53,95 @@ export interface ProjectedOperation {
   readonly outputSchema?: Readonly<Record<string, unknown>>
 }
 
+/**
+ * Lifecycle state of one provider's MCP session, as the host sees it.
+ *
+ * It exists because a session can end without the connection noticing: a streamable-HTTP
+ * server that restarts keeps its URL but forgets every session id it issued, and a stdio
+ * child can die. Without a state to read, "this capability is broken" and "this capability
+ * was never configured" look the same from inside a cell.
+ */
+export interface ProviderHealth {
+  readonly id: string
+  readonly label: string
+  readonly state: 'connected' | 'reconnecting' | 'failed'
+  /**
+   * False for a provider that is configured but never got connected in this process.
+   *
+   * The distinction `state: 'failed'` alone cannot make: "was attached and is currently down"
+   * (retry the session) and "never attached" (connect it for the first time) are different
+   * situations, and the second is the one a DSH started while the IDE was still closed leaves
+   * behind. `reconnect` handles both; this field is how a caller tells which it is looking at.
+   */
+  readonly attached: boolean
+  /**
+   * False when the connection owns no session that could be re-opened — a host-supplied
+   * connection, or one built directly for a test. Reported rather than guessed at, so
+   * `cap.reconnect` can refuse honestly instead of pretending to have done something.
+   */
+  readonly reconnectable: boolean
+  readonly operations: number
+  /** Bumped on every successful (re)connect, so a stale catalog is detectable without diffing. */
+  readonly generation: number
+  /** Sessions rebuilt after this connection's first one. */
+  readonly reconnects: number
+  /** Why the last re-open failed. Kept rather than logged: the reason is the useful fact. */
+  readonly lastError?: string
+  /** The endpoint in use now, which a reconnect override may have changed. */
+  readonly url?: string
+}
+
+export interface ProviderReconnectOptions {
+  /**
+   * Re-open against this endpoint instead of the spec's `url`.
+   *
+   * An IDE that picks a new port on restart would otherwise be unreachable for the life of
+   * the host process, since provider specs are read once at startup.
+   */
+  readonly url?: string
+}
+
+/**
+ * The re-openable half of a connection: what a long-lived client needs in order to survive
+ * the server under it restarting.
+ */
+export interface ProviderSession {
+  /** Live state, for a caller that wants to know before it calls. */
+  health(): ProviderHealth
+  /**
+   * Discard the current session, open a new one, and refresh the projected catalog.
+   *
+   * Single-flight: concurrent callers share one attempt rather than racing to open several
+   * sessions. Rejects — with the reason — when the server cannot be reached; the previous
+   * failure is never reported as success.
+   */
+  reconnect(options?: ProviderReconnectOptions): Promise<ProviderHealth>
+}
+
+/**
+ * One provider as the kernel's catalog carries it: identity and surface, no connection.
+ *
+ * The kernel never holds a `ProviderConnection` — that lives on the host, behind the bridge —
+ * so this is the whole of what crosses over, both in the snapshot the kernel starts with and
+ * in the refresh that follows a rebuilt session.
+ */
+export interface CatalogEntry {
+  readonly id: string
+  readonly label: string
+  readonly operations: readonly ProjectedOperation[]
+}
+
 /** A live connection to one MCP server, projected for the kernel. */
 export interface ProviderConnection {
   readonly id: string
   readonly label: string
+  /**
+   * What the server advertises *now*.
+   *
+   * A getter on the real connection, not a snapshot: a session that had to be rebuilt may be
+   * serving a different tool list, and a caller that cached the first one would keep offering
+   * operations the server no longer has.
+   */
   readonly operations: readonly ProjectedOperation[]
   /**
    * One MCP call. `signal` is aborted when the cell that asked for it can no longer
@@ -65,6 +150,14 @@ export interface ProviderConnection {
    * that session's later reads until it eventually settles.
    */
   call(operation: string, args: Readonly<Record<string, unknown>>, signal?: AbortSignal): Promise<unknown>
+  /**
+   * Absent for a connection with no session to lose.
+   *
+   * `connectMcpProvider` always provides it; the test seam (`RuntimeOptions.connector`) and any
+   * host-supplied connection may not, and saying so by omission is more honest than a
+   * `reconnect` that resolves without having reconnected anything.
+   */
+  readonly session?: ProviderSession
   close(): Promise<void>
 }
 
@@ -79,6 +172,19 @@ export interface ProviderConnection {
 export interface ProviderFailure {
   readonly id: string
   readonly error: string
+}
+
+/**
+ * A configured provider that is not attached, in the two shapes discovery needs.
+ *
+ * One record rather than two parallel lists, because the reason a provider is missing and how
+ * healthy it looks are the same fact: splitting them is how they end up disagreeing. The label
+ * and endpoint come from the spec, which is why the host has to build this — the failure the
+ * kernel snapshot carries is only an id and a message.
+ */
+export interface UnattachedProvider {
+  readonly failure: ProviderFailure
+  readonly health: ProviderHealth
 }
 
 /**
