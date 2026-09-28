@@ -33,7 +33,9 @@ CapabilityRuntime                     ← catalog + host bridge
 | **真 IDEA 端到端**（67 工具，四步链） | **523 ms**，且 cell 里**没有 `projectPath`**（宿主注入） |
 | 模型可见 schema | `["q","paths","limit"]` —— `projectPath` 已剥掉 |
 | 本地发现（`capHelp()` / `cap.describe()`） | 6 ms，不过桥 |
-| 测试 | **33 个** hermetic（18 runtime + 9 adapter + 6 bootstrap），无网络无 IDE |
+| 会话失效恢复（服务端重启后忘记 session id） | 透明重连 + 重试一次；并发 10 个调用只重连 **1** 次 |
+| 启动时不可达的 provider | spec 保留，`cap.reconnect(id)` 运行期接入（恰好 1 个新会话），不必重启宿主 |
+| 测试 | **66 个** hermetic（44 runtime + 15 adapter + 7 bootstrap），无网络无 IDE |
 
 复用内核的语义：持久 ✅、改值 ✅、函数持久 ✅、抛错检查点 ✅；**`let`/`const` 不能跨 cell 重声明（`var` 可以）**——这是对标 node_repl 时唯一的偏差，已写进 `js` 的描述引导模型。
 
@@ -46,6 +48,10 @@ docs/01-prior-art-and-reuse.zh-CN.md     先验方案与复用决策（含实测
 docs/02-reuse-spike-results.zh-CN.md     复用内核的 spike 结果（路径 A 已验证）
 docs/03-integration-spec.zh-CN.md        接入规范 + 挂进 DSH profile 的方法
 docs/04-architecture.zh-CN.md            组件边界、调用链与 provider 生命周期
+docs/05-image-content-blocks.zh-CN.md    cell 与 provider 图片作为内容块的通路与预算
+docs/06-kernel-boundaries.zh-CN.md       内核边界**决定记录**：不做 GC / 不自动回收 / 不设天花板及其理由
+docs/07-codemode-ptc-and-kernel-lifetime.zh-CN.md  Code Mode / DSH PTC / 内核寿命的三方对照实测
+docs/08-mcp-session-recovery.zh-CN.md    provider 会话失效（404 / 传输层死亡）与自动恢复
 docs/evidence/reuse-spike*.log           原始 spike 日志
 spike/                                   最初的可行性 spike（保留为证据）
 packages/runtime/                        宿主侧：目录桥 + MCP 目录 + inject + 内核管理 + CLI

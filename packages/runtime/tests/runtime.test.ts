@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   applyInjection,
+  catalogRecoveryNotice,
   collectProviderImages,
   connectMcpProvider,
   createCapabilityRuntime,
@@ -678,4 +679,14 @@ describe('kernel replacement', () => {
       await runtime.dispose()
     }
   }, 120_000)
+
+  it('says so when the catalog could not be put back, instead of leaving an unexplained absence', () => {
+    // The failure branch is not reachable from a cell — it needs the kernel's own MCP client to
+    // be gone — so the one thing worth asserting is the text a model would have to act on: an
+    // absence with no reason is exactly the state this runtime keeps having to fix.
+    expect(catalogRecoveryNotice(undefined)).toContain('capability catalog reinstalled')
+    const failed = catalogRecoveryNotice('kernel client is closed')
+    expect(failed).toContain('could not be reinstalled')
+    expect(failed).toContain('kernel client is closed')
+  })
 })
