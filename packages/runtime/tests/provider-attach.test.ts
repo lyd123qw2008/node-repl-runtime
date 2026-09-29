@@ -57,7 +57,7 @@ describe('providers that were not up at startup', () => {
       expect(attached.status).toBe('ok')
       expect(attached.output).toContain('attached=true')
       expect(attached.output).toContain('state=connected')
-      expect(attached.output).toContain('operations=2')
+      expect(attached.output).toContain('operations=3')
       // The catalog arrived with the reply, so the namespace exists in this same cell.
       expect(late.sessions()).toBe(1)
 
@@ -69,7 +69,7 @@ describe('providers that were not up at startup', () => {
       // Discovery stops reporting it as missing, host side and kernel side.
       expect(runtime.failures()).toEqual([])
       const help = await runtime.js('nodeRepl.write(capHelp());')
-      expect(help.output).toContain('idea (Idea-like MCP) — 2 operation(s)')
+      expect(help.output).toContain('idea (Idea-like MCP) — 3 operation(s)')
       expect(help.output).not.toContain('NOT ATTACHED')
     } finally {
       await runtime.dispose()
@@ -126,6 +126,42 @@ describe('providers that were not up at startup', () => {
       )
       expect(unknown.output).toContain('unknown:')
       expect(unknown.output).toContain('nope')
+    } finally {
+      await runtime.dispose()
+    }
+  }, 120_000)
+
+  it('connects providers concurrently, so startup costs the slowest one and not their sum', async () => {
+    // Independent network handshakes, so overlap is the whole point: a host started while an IDE is
+    // warming up must not wait out that IDE before it can serve anything. The assertion is the
+    // overlap itself (a counter) rather than elapsed time, which would be a flake waiting to happen
+    // on a loaded machine.
+    let inFlight = 0
+    let maxInFlight = 0
+    const runtime = await createCapabilityRuntime({
+      providers: [
+        { id: 'slow', transport: 'streamable-http', url: 'http://127.0.0.1:1/unused' },
+        { id: 'fast', transport: 'streamable-http', url: 'http://127.0.0.1:1/unused' },
+      ],
+      connector: async spec => {
+        inFlight += 1
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise(resolve => setTimeout(resolve, 300))
+        inFlight -= 1
+        return await Promise.resolve({
+          id: spec.id,
+          label: spec.id,
+          operations: [],
+          call: async () => null,
+          close: async () => {},
+        })
+      },
+      cellTimeoutMs: 20_000,
+    })
+    try {
+      expect(maxInFlight).toBe(2)
+      // Configured order is preserved for the catalog and for failures.
+      expect(runtime.catalog().map(provider => provider.id)).toEqual(['slow', 'fast'])
     } finally {
       await runtime.dispose()
     }
@@ -188,7 +224,7 @@ describe('providers that were not up at startup', () => {
       )
       expect(after.status).toBe('ok')
       expect(after.output).toContain('idea=object')
-      expect(after.output).toContain('ops=2')
+      expect(after.output).toContain('ops=3')
       expect(after.output).not.toContain('NOT ATTACHED')
     } finally {
       await runtime.dispose()

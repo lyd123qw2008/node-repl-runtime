@@ -166,6 +166,23 @@ export function isSessionLoss(error) {
 function describe(error) {
     return error instanceof Error ? error.message : String(error);
 }
+/**
+ * Budget for one provider call that reports no progress. Overridable per provider.
+ *
+ * It is deliberately not the real ceiling: the cell's own deadline aborts the call (and the SDK
+ * then cancels it on the server), so this only has to be long enough that an operation which is
+ * *silently* working — an IDE indexing a project, a browser waiting on a page — is not killed
+ * while it is still making progress. Progress notifications renew it; see `call()`.
+ */
+const DEFAULT_PROVIDER_TIMEOUT_MS = 300_000;
+/**
+ * Hard ceiling for one provider call, progress or not.
+ *
+ * A backstop for the pathological case — a server that reports progress forever — rather than a
+ * policy: the cell's budget normally fires far earlier, and nobody is waiting for this call by
+ * then.
+ */
+const MAX_PROVIDER_TOTAL_TIMEOUT_MS = 3_600_000;
 /** What the server advertises now, projected into model-visible operations. */
 async function discoverOperations(client, spec) {
     const listed = await client.listTools(undefined, { timeout: 60_000, cacheMode: 'refresh' });
@@ -360,10 +377,27 @@ export async function connectMcpProvider(spec) {
             const client = live.client;
             if (client === undefined)
                 throw new Error(`provider ${spec.id} has no open session`);
-            const result = await client.callTool({ name: operation, arguments: withInjected }, 
-            // Aborting this request sends the MCP cancellation notification, so a provider
-            // that supports it can stop the work instead of finishing it for nobody.
-            { timeout: 300_000, ...signal === undefined ? {} : { signal } });
+            const result = await client.callTool({ name: operation, arguments: withInjected }, {
+                // A long IDE operation — a full rebuild, a terminal command running a test suite —
+                // reports progress for minutes, so the deadline has to follow the work rather than the
+                // wall clock. That takes two options, and neither works alone:
+                //
+                //   - `onprogress` is what makes the SDK attach `_meta.progressToken` at all. Without
+                //     it a compliant server has no token to report against, so no progress ever arrives;
+                //   - `resetTimeoutOnProgress` is what lets each notification push the deadline out. The
+                //     SDK defaults it to false, which is why a five-minute build used to die with
+                //     `Request timed out` while the IDE was still working.
+                //
+                // The handler itself is empty on purpose: progress is a liveness signal here, not content
+                // the cell asked for. Surfacing it would need a push channel from the bridge.
+                onprogress: () => { },
+                resetTimeoutOnProgress: true,
+                timeout: spec.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS,
+                maxTotalTimeout: MAX_PROVIDER_TOTAL_TIMEOUT_MS,
+                // Aborting this request sends the MCP cancellation notification, so a provider
+                // that supports it can stop the work instead of finishing it for nobody.
+                ...signal === undefined ? {} : { signal },
+            });
             if (result.isError === true) {
                 const text = (result.content ?? [])
                     .filter((block) => block.type === 'text')

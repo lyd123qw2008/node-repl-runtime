@@ -27,6 +27,15 @@ export interface McpProviderSpec {
     readonly inject?: Readonly<Record<string, unknown>>;
     /** Optional exposure narrowing: regular expressions matched against tool names. */
     readonly include?: readonly string[] | null;
+    /**
+     * Budget for one call that reports no progress, in milliseconds. Default 300_000.
+     *
+     * A *quiet* call is what this bounds: the server's progress notifications renew the deadline, so
+     * an operation that keeps reporting stays alive while one that goes silent for this long is
+     * cancelled. It is not the real ceiling — the cell's own budget aborts the call, and a hard
+     * one-hour ceiling applies regardless.
+     */
+    readonly timeoutMs?: number;
 }
 /** One operation as the model sees it: the provider's own tool, minus host-owned arguments. */
 export interface ProjectedOperation {
