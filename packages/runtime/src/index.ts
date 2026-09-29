@@ -32,7 +32,7 @@ export {
   selectTools,
   unattachedHealth,
 } from './catalog.js'
-export { catalogRecoveryNotice } from './kernel.js'
+export { abandonedCallsNotice, catalogRecoveryNotice } from './kernel.js'
 // Pure functions of one provider reply, so they are asserted directly instead of through a
 // CONNECTED server — the same reason `projectOperation` and `selectTools` are exported.
 export {
@@ -131,10 +131,19 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
     return attempt
   }
 
-  for (const spec of options.providers) {
+  /**
+   * Attach every enabled provider, concurrently.
+   *
+   * Concurrency is the point: these are independent network handshakes, and doing them in a row
+   * makes startup cost the *sum* of every server's latency. That is not hypothetical — a host
+   * started while an IDE is still warming up used to wait out that IDE before it could answer
+   * anything, even though two other servers were ready in milliseconds. A server that never
+   * answers is bounded by the SDK's own request timeout rather than blocking forever.
+   */
+  await Promise.all(options.providers.map(async (spec) => {
     if (spec.disabled === true) {
       disabled.add(spec.id)
-      continue
+      return
     }
     try {
       await connect(spec)
@@ -146,11 +155,21 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
       unattached.set(spec.id, { spec, error: message })
       console.warn(`[node-repl-runtime] provider ${spec.id} failed to connect: ${message}`)
     }
-  }
+  }))
   // An empty catalog is a valid runtime state. The face still provides js and
   // js_reset, while cap.list() simply reports no connected capabilities.
 
+  /**
+   * Failures in configured order, not in whichever order the servers answered.
+   *
+   * Now that connections overlap, insertion order into `unattached` is completion order, which
+   * would make the kernel's snapshot — and `capHelp()` with it — reshuffle between runs of the
+   * same configuration.
+   */
+  const configuredOrder = new Map(options.providers.map((spec, index) => [spec.id, index]))
   const unattachedProviders = (): readonly UnattachedProvider[] => [...unattached.values()]
+    .sort((left, right) =>
+      (configuredOrder.get(left.spec.id) ?? 0) - (configuredOrder.get(right.spec.id) ?? 0))
     .map(entry => ({
       failure: { id: entry.spec.id, error: entry.error },
       health: unattachedHealth(entry.spec, entry.error),

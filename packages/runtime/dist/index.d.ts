@@ -9,7 +9,7 @@
 import type { JsCellResult, JsOptions, McpProviderSpec, ProviderConnection, ProviderFailure, RuntimeOptions } from './types.js';
 export * from './types.js';
 export { applyInjection, catalogEntries, connectMcpProvider, isSessionLoss, projectOperation, providerHealth, selectTools, unattachedHealth, } from './catalog.js';
-export { catalogRecoveryNotice } from './kernel.js';
+export { abandonedCallsNotice, catalogRecoveryNotice } from './kernel.js';
 export { collectProviderImages, mergeProviderImages, PROVIDER_IMAGE_MAX_BYTES, PROVIDER_IMAGE_TOTAL_MAX_BYTES, type ProviderImage, type ProviderImages, } from './catalog.js';
 /** The reused kernel server. Its package entry point *is* the MCP server. */
 export declare const KERNEL_PACKAGE = "@qwen-code/node-repl-mcp";

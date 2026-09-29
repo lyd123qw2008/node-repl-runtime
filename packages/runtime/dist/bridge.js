@@ -113,7 +113,8 @@ export async function startBridge(providers, options = {}) {
             const after = generation(provider);
             return before !== undefined && after !== before ? snapshot() : undefined;
         };
-        inFlight.set(controller, full);
+        const startedAt = Date.now();
+        inFlight.set(controller, { name: full, startedAt, elapsedMs: 0 });
         try {
             const value = await provider.call(operation, (request.args ?? {}), controller.signal);
             const catalog = rebuilt();
@@ -180,6 +181,11 @@ export async function startBridge(providers, options = {}) {
             inFlight.clear();
             for (const [controller] of pending)
                 controller.abort(new Error(reason));
+        },
+        inFlightCalls() {
+            return [...inFlight.values()]
+                .map(call => ({ name: call.name, elapsedMs: Date.now() - call.startedAt }))
+                .sort((left, right) => right.elapsedMs - left.elapsedMs);
         },
         async close() {
             await new Promise(resolve => server.close(() => resolve()));

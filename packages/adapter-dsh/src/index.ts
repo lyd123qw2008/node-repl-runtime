@@ -42,7 +42,7 @@ const JS_PARAMETERS = {
   },
   timeoutMs: {
     type: 'integer',
-    description: 'Optional budget for this cell in milliseconds. Defaults to the runtime budget (30 s).',
+    description: 'Optional budget for this cell in milliseconds. Defaults to the runtime budget (30 s). Give a long operation — a build, a terminal command — the budget it needs: a cell that overruns is cancelled.',
   },
   title: {
     type: 'string',

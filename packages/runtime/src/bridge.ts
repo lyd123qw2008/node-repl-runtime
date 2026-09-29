@@ -27,6 +27,7 @@ import { randomBytes } from 'node:crypto'
 import { catalogEntries, providerHealth } from './catalog.js'
 import type {
   CatalogEntry,
+  InFlightCall,
   ProviderConnection,
   ProviderFailure,
   ProviderHealth,
@@ -94,6 +95,13 @@ export interface Bridge {
    * notification, so a provider that supports cancellation can stop the work as well.
    */
   abandonInFlight(reason: string): void
+  /**
+   * The provider calls still waiting for an answer, oldest first, with how long each has run.
+   *
+   * Asked for *before* abandoning them: a cell that ran out of budget while a build was in flight
+   * should say so, and after `abandonInFlight` there is nothing left to ask.
+   */
+  inFlightCalls(): readonly InFlightCall[]
   close(): Promise<void>
 }
 
@@ -103,7 +111,7 @@ export async function startBridge(
 ): Promise<Bridge> {
   const token = randomBytes(24).toString('hex')
   /** Provider calls currently running, keyed by the controller that can abort them. */
-  const inFlight = new Map<AbortController, string>()
+  const inFlight = new Map<AbortController, InFlightCall & { readonly startedAt: number }>()
 
   const snapshot = (): CatalogPayload => {
     const unattached = options.unattached?.() ?? []
@@ -200,7 +208,8 @@ export async function startBridge(
       return before !== undefined && after !== before ? snapshot() : undefined
     }
 
-    inFlight.set(controller, full)
+    const startedAt = Date.now()
+    inFlight.set(controller, { name: full, startedAt, elapsedMs: 0 })
     try {
       const value = await provider.call(operation, (request.args ?? {}) as Record<string, unknown>, controller.signal)
       const catalog = rebuilt()
@@ -263,6 +272,11 @@ export async function startBridge(
       const pending = [...inFlight.entries()]
       inFlight.clear()
       for (const [controller] of pending) controller.abort(new Error(reason))
+    },
+    inFlightCalls() {
+      return [...inFlight.values()]
+        .map(call => ({ name: call.name, elapsedMs: Date.now() - call.startedAt }))
+        .sort((left, right) => right.elapsedMs - left.elapsedMs)
     },
     async close() {
       await new Promise<void>(resolve => server.close(() => resolve()))

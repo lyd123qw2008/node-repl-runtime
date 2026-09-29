@@ -27,6 +27,15 @@ export interface McpProviderSpec {
     readonly inject?: Readonly<Record<string, unknown>>;
     /** Optional exposure narrowing: regular expressions matched against tool names. */
     readonly include?: readonly string[] | null;
+    /**
+     * Budget for one call that reports no progress, in milliseconds. Default 300_000.
+     *
+     * A *quiet* call is what this bounds: the server's progress notifications renew the deadline, so
+     * an operation that keeps reporting stays alive while one that goes silent for this long is
+     * cancelled. It is not the real ceiling — the cell's own budget aborts the call, and a hard
+     * one-hour ceiling applies regardless.
+     */
+    readonly timeoutMs?: number;
 }
 /** One operation as the model sees it: the provider's own tool, minus host-owned arguments. */
 export interface ProjectedOperation {
@@ -123,6 +132,18 @@ export interface CatalogEntry {
     readonly id: string;
     readonly label: string;
     readonly operations: readonly ProjectedOperation[];
+}
+/**
+ * A provider call still waiting for an answer that nothing can read any more.
+ *
+ * Named rather than counted: when a cell runs out of budget mid-operation, "one call was
+ * cancelled" leaves the reader guessing whether the casualty was a screenshot or a 20-minute
+ * build — and the two call for different next moves.
+ */
+export interface InFlightCall {
+    /** `provider.operation`, exactly as the cell asked for it. */
+    readonly name: string;
+    readonly elapsedMs: number;
 }
 /** A live connection to one MCP server, projected for the kernel. */
 export interface ProviderConnection {

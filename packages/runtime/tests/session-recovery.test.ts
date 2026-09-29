@@ -149,7 +149,7 @@ describe('streamable-HTTP session recovery', () => {
       expect(status.output).toContain('"state":"connected"')
       expect(status.output).toContain('"attached":true')
       expect(status.output).toContain('"reconnectable":true')
-      expect(status.output).toContain('"operations":2')
+      expect(status.output).toContain('"operations":3')
     } finally {
       await runtime.dispose()
       await server.close()

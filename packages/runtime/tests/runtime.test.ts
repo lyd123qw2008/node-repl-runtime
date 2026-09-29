@@ -15,6 +15,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
+  abandonedCallsNotice,
   applyInjection,
   catalogRecoveryNotice,
   collectProviderImages,
@@ -688,5 +689,28 @@ describe('kernel replacement', () => {
     const failed = catalogRecoveryNotice('kernel client is closed')
     expect(failed).toContain('could not be reinstalled')
     expect(failed).toContain('kernel client is closed')
+  })
+
+  it('names the calls a budget ending cut off, and the move that fixes it', () => {
+    // A cell out of budget mid-build is the case this exists for: "timed out" alone cannot be acted
+    // on, because a cancelled build and a hung tool call for different next moves.
+    const overrun = abandonedCallsNotice(
+      [{ name: 'idea.build_project', elapsedMs: 28_400 }],
+      'timeout',
+      30_000,
+    )
+    expect(overrun).toContain('cell budget 30000 ms expired')
+    expect(overrun).toContain('idea.build_project (28.4 s)')
+    expect(overrun).toContain('longer timeoutMs')
+    // A cancelled call may already have caused part of its side effect, so the retry is cautioned.
+    expect(overrun).toContain('side-effecting')
+
+    // Other endings keep their own wording: the budget is not what ended these.
+    const crashed = abandonedCallsNotice([{ name: 'cua.click', elapsedMs: 900 }], 'crashed', 30_000)
+    expect(crashed).toContain('cell ended as crashed')
+    expect(crashed).not.toContain('longer timeoutMs')
+
+    // A cell that finished on its own reports nothing: fire-and-forget calls are allowed by design.
+    expect(abandonedCallsNotice([], 'timeout', 30_000)).toBeUndefined()
   })
 })

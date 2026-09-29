@@ -33,6 +33,18 @@ const DEFAULT_TOOLS: readonly AdvertisedTool[] = [
     description: 'Problems the IDE found, as the real server reports them.',
     inputSchema: { type: 'object', properties: { projectPath: { type: 'string' } } },
   },
+  {
+    // The long-operation stand-in: it can answer quietly (which is what the request deadline
+    // bounds) or report progress while it works (which is what renews that deadline). Progress has
+    // to travel on an SSE response stream, because a notification cannot share one JSON body with
+    // the result it precedes.
+    name: 'slow',
+    description: 'Sleep for `ms`, optionally reporting progress every `progressEveryMs`.',
+    inputSchema: {
+      type: 'object',
+      properties: { ms: { type: 'number' }, progressEveryMs: { type: 'number' } },
+    },
+  },
 ]
 
 export interface IdeaLikeServer {
@@ -66,6 +78,10 @@ function readBody(request: IncomingMessage): Promise<string> {
 function send(response: ServerResponse, status: number, body: string, headers: Record<string, string> = {}): void {
   response.writeHead(status, { 'content-type': 'application/json', ...headers })
   response.end(body)
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => { setTimeout(resolve, ms) })
 }
 
 export async function startIdeaLikeServer(
@@ -166,7 +182,56 @@ export async function startIdeaLikeServer(
 
       if (requestMessage.method === 'tools/call') {
         callCount += 1
-        const params = (requestMessage as { params?: { name?: string; arguments?: unknown } }).params ?? {}
+        const params = (requestMessage as {
+          params?: { name?: string; arguments?: unknown; _meta?: { progressToken?: unknown } }
+        }).params ?? {}
+        const args = (params.arguments ?? {}) as { ms?: unknown; progressEveryMs?: unknown }
+        const ms = typeof args.ms === 'number' ? args.ms : 0
+
+        if (params.name === 'slow') {
+          const every = typeof args.progressEveryMs === 'number' && args.progressEveryMs > 0 ? args.progressEveryMs : 0
+          const token = params._meta?.progressToken
+          const result = {
+            jsonrpc: '2.0',
+            id: requestMessage.id,
+            result: {
+              content: [{ type: 'text', text: `slow ok after ${ms} ms` }],
+              structuredContent: { sleptMs: ms },
+            },
+          }
+
+          if (every === 0 || token === undefined) {
+            // Quiet: the client's own deadline is the only thing that can stop this.
+            await sleep(ms)
+            send(response, 200, JSON.stringify(result))
+            return
+          }
+
+          // Progress has to arrive before the result, so the answer is an SSE stream: one
+          // notification per interval, then the terminal result message.
+          response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+          // A client that gave up mid-stream (a cell out of budget) closes the socket; writing to it
+          // afterwards must not take the fixture down with an unhandled stream error.
+          response.on('error', () => {})
+          const total = Math.ceil(ms / every)
+          let steps = 0
+          for (let waited = 0; waited + every <= ms; waited += every) {
+            await sleep(every)
+            if (response.destroyed || response.writableEnded) return
+            steps += 1
+            response.write(`data: ${JSON.stringify({
+              jsonrpc: '2.0',
+              method: 'notifications/progress',
+              params: { progressToken: token, progress: steps, total },
+            })}\n\n`)
+          }
+          await sleep(Math.max(0, ms - steps * every))
+          if (response.destroyed || response.writableEnded) return
+          response.write(`data: ${JSON.stringify(result)}\n\n`)
+          response.end()
+          return
+        }
+
         send(response, 200, JSON.stringify({
           jsonrpc: '2.0',
           id: requestMessage.id,

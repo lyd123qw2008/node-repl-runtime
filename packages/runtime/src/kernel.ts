@@ -27,7 +27,7 @@ import { Client } from '@modelcontextprotocol/client'
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import type { Bridge } from './bridge.js'
 import { catalogEntries } from './catalog.js'
-import type { JsCellBlock, JsCellResult, JsOptions, ProviderConnection, ProviderFailure } from './types.js'
+import type { JsCellBlock, JsCellResult, JsOptions, InFlightCall, ProviderConnection, ProviderFailure } from './types.js'
 
 const BRIDGE_ASSET_DIR = fileURLToPath(new URL('../assets/nr-cap/', import.meta.url))
 
@@ -50,6 +50,29 @@ export function catalogRecoveryNotice(failure: string | undefined): string {
   return failure === undefined
     ? CATALOG_RESTORED_NOTICE
     : `[node_repl kernel was replaced and the capability catalog could not be reinstalled: ${failure}]`
+}
+
+/**
+ * What a cell that ended with provider calls still in flight is told about them.
+ *
+ * Two facts, because both are needed to act: which call was cut off and how long it had been
+ * running. A budget ending is then distinguishable from a hung tool, and the fix — a larger
+ * `timeoutMs` — is stated where the model reads it rather than left in a document. The caution is
+ * not boilerplate: a cancelled call may already have caused part of its side effect, so a blind
+ * re-run of a deploy or a command that writes files is the one retry that can make things worse.
+ */
+export function abandonedCallsNotice(
+  calls: readonly InFlightCall[],
+  status: JsCellResult['status'],
+  budgetMs: number,
+): string | undefined {
+  if (calls.length === 0) return undefined
+  const list = calls
+    .map(call => `${call.name} (${(call.elapsedMs / 1000).toFixed(1)} s)`)
+    .join(', ')
+  return status === 'timeout'
+    ? `[cell budget ${budgetMs} ms expired with ${list} still in flight — the call was cancelled; give a longer timeoutMs, and check a side-effecting call's state before re-running]`
+    : `[cell ended as ${status} with ${list} still in flight — the call was cancelled and nothing can read its answer]`
 }
 
 /**
@@ -327,6 +350,14 @@ export async function startKernel(options: {
         })
         activeCellId = outcome.runningCellId
       }
+      // Nothing can read an in-flight provider answer once the cell is gone, so the calls still
+      // waiting are captured *here* — before either path below abandons them — and named in the
+      // result. Without that, a cell that ran out of budget mid-build reports a bare timeout and
+      // the reader cannot tell "the IDE was still working, give me a bigger budget" from "the tool
+      // hung", which are different next moves.
+      const abandoned = ABANDONED_CELL_STATUSES.has(outcome.result.status)
+        ? options.bridge.inFlightCalls()
+        : []
       // The budget is spent and the cell is still going. The kernel has one active-cell
       // slot: leaving it occupied would refuse every later cell — including the install
       // cell of a reset — so the cell is cancelled rather than abandoned.
@@ -335,13 +366,17 @@ export async function startKernel(options: {
       // answer either — and a request left running blocks that provider's session for every
       // later cell. A cell that finished on its own is left alone: it may deliberately have
       // fired a call it never awaited.
-      if (ABANDONED_CELL_STATUSES.has(outcome.result.status)) {
+      if (abandoned.length > 0 || ABANDONED_CELL_STATUSES.has(outcome.result.status)) {
         options.bridge.abandonInFlight(`cell ended as ${outcome.result.status}: nothing can read its answers`)
       }
-      const result: JsCellResult = { ...outcome.result, durationMs: Date.now() - began }
+      let result: JsCellResult = { ...outcome.result, durationMs: Date.now() - began }
       // A crashed cell took the kernel with it; the replacement has no catalog unless this
       // puts one back.
-      return result.status === 'crashed' ? await recoverCatalog(result) : result
+      if (result.status === 'crashed') result = await recoverCatalog(result)
+      const notice = abandonedCallsNotice(abandoned, result.status, timeoutMs)
+      if (notice === undefined) return result
+      const blocks = [...result.blocks, { kind: 'text', text: notice } as const]
+      return { ...result, blocks, output: textOf(blocks).trimEnd() }
     },
     reset: async () => {
       // `node_repl_reset` refuses while a cell is active, so clear the slot first.

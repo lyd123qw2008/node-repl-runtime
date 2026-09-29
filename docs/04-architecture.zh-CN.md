@@ -92,6 +92,25 @@ flowchart TD
 - **启动时不可达**的 provider 也不再是一去不返：它的 spec 被保留，`cap.reconnect(id)` 可以在运行期
   首次接入（`cap.status()` 会以 `attached: false` + 原因列出它）；只有 `disabled: true` 明确拒绝。
   详见 [`docs/08-mcp-session-recovery.zh-CN.md`](08-mcp-session-recovery.zh-CN.md)。
+- **provider 并发连接**：启动时几个 provider 的握手是并行的，所以启动成本是"最慢那个"而不是"它们的和"；
+  失败列表按配置顺序输出，不按谁先答完（否则同一份配置每次跑出来的 `capHelp()` 顺序都会变）；
+- **调用预算跟着活干走**：默认 300 s 只约束**静默**的调用——运行时会请求进度通知
+  （`onprogress`，SDK 只有拿到它才会附 `_meta.progressToken`）并让每条通知续期
+  （`resetTimeoutOnProgress`，SDK 默认是关的）。所以一次五分钟以上的 IDEA Rebuild 不会被
+  `Request timed out` 打断。真正的界仍是 **cell 预算**（cell 超时会 abort 该调用并让 SDK 发出取消），
+  另有 1 小时硬顶兜底；per-provider 可用 `timeoutMs` 覆盖。
+  **实测（2026-09-29，真 IDEA）**：`execute_terminal_command` 一个 3.2 s 的操作期间约 **1 s 一条**进度
+  通知。同一个 3.2 s 调用配 1.5 s 超时：带 `resetTimeoutOnProgress` **成功（3173 ms）**，
+  不带则 **1600 ms 就 `Request timed out`**（期间已收到 2 条通知）。由此得到一条纪律——
+  **provider `timeoutMs` 必须显著大于通知间隔**，否则续期只是把死亡推迟一个间隔
+  （`timeout: 1000` 配 ≈1.02 s 间隔时，存活从 1089 ms 推到 2099 ms 后仍然死）；
+  默认 300 s 相对 1 s 间隔有 300× 余量，因此安全。
+- **预算咬到在飞的调用时点名**：cell 因预算/崩溃/取消结束、且当时还有 provider 调用在飞时，
+  结果里会附一行 `[cell budget 30000 ms expired with idea.build_project (28.4 s) still in flight — …]`。
+  写在这里（而不是只写进文档）是因为读到它的人正是要决定"重试还是别重试"的那个：
+  它同时区分了"该加预算"与"工具卡死"，并提醒带副作用的调用先查状态再重跑。
+  **默认值刻意保持 30 s**：内核的活动槽是全进程共享的，把默认抬高会让每一个卡住的 cell
+  都拖住所有会话；所以走"按需声明 + 失败自解释"，而不是"放宽全局"。
 
 ## 3. 一次调用的路径
 

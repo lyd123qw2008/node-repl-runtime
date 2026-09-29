@@ -18,7 +18,7 @@
  * to prefer `var` for names it may redefine.
  */
 import type { Bridge } from './bridge.js';
-import type { JsCellResult, JsOptions, ProviderConnection, ProviderFailure } from './types.js';
+import type { JsCellResult, JsOptions, InFlightCall, ProviderConnection, ProviderFailure } from './types.js';
 /**
  * What a cell that lost its kernel is told about the catalog.
  *
@@ -29,6 +29,16 @@ import type { JsCellResult, JsOptions, ProviderConnection, ProviderFailure } fro
  * function of the failure, like the other projections this runtime asserts directly.
  */
 export declare function catalogRecoveryNotice(failure: string | undefined): string;
+/**
+ * What a cell that ended with provider calls still in flight is told about them.
+ *
+ * Two facts, because both are needed to act: which call was cut off and how long it had been
+ * running. A budget ending is then distinguishable from a hung tool, and the fix — a larger
+ * `timeoutMs` — is stated where the model reads it rather than left in a document. The caution is
+ * not boilerplate: a cancelled call may already have caused part of its side effect, so a blind
+ * re-run of a deploy or a command that writes files is the one retry that can make things worse.
+ */
+export declare function abandonedCallsNotice(calls: readonly InFlightCall[], status: JsCellResult['status'], budgetMs: number): string | undefined;
 /**
  * Where the kernel child lives. Kept scratch: it holds a generated config, not user data.
  *
