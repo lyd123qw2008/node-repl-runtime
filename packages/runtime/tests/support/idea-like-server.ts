@@ -210,10 +210,14 @@ export async function startIdeaLikeServer(
           // Progress has to arrive before the result, so the answer is an SSE stream: one
           // notification per interval, then the terminal result message.
           response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+          // A client that gave up mid-stream (a cell out of budget) closes the socket; writing to it
+          // afterwards must not take the fixture down with an unhandled stream error.
+          response.on('error', () => {})
           const total = Math.ceil(ms / every)
           let steps = 0
           for (let waited = 0; waited + every <= ms; waited += every) {
             await sleep(every)
+            if (response.destroyed || response.writableEnded) return
             steps += 1
             response.write(`data: ${JSON.stringify({
               jsonrpc: '2.0',
@@ -222,6 +226,7 @@ export async function startIdeaLikeServer(
             })}\n\n`)
           }
           await sleep(Math.max(0, ms - steps * every))
+          if (response.destroyed || response.writableEnded) return
           response.write(`data: ${JSON.stringify(result)}\n\n`)
           response.end()
           return

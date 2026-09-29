@@ -21,7 +21,7 @@
  * one socket and asks for nothing it did not ask for, and a session that was rebuilt is
  * exactly the moment its stale operation list would otherwise start lying.
  */
-import type { ProviderConnection, UnattachedProvider } from './types.js';
+import type { InFlightCall, ProviderConnection, UnattachedProvider } from './types.js';
 export interface BridgeOptions {
     /**
      * Providers that are configured but not attached, in both shapes the payload needs.
@@ -56,6 +56,13 @@ export interface Bridge {
      * notification, so a provider that supports cancellation can stop the work as well.
      */
     abandonInFlight(reason: string): void;
+    /**
+     * The provider calls still waiting for an answer, oldest first, with how long each has run.
+     *
+     * Asked for *before* abandoning them: a cell that ran out of budget while a build was in flight
+     * should say so, and after `abandonInFlight` there is nothing left to ask.
+     */
+    inFlightCalls(): readonly InFlightCall[];
     close(): Promise<void>;
 }
 export declare function startBridge(providers: ReadonlyMap<string, ProviderConnection>, options?: BridgeOptions): Promise<Bridge>;

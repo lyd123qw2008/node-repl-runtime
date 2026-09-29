@@ -67,3 +67,34 @@ describe('provider call deadlines', () => {
     }
   }, 120_000)
 })
+
+describe('a cell that runs out of budget mid-operation', () => {
+  it('names the provider call it cancelled instead of reporting a bare timeout', async () => {
+    const server = await startIdeaLikeServer()
+    const runtime = await createCapabilityRuntime({
+      providers: [{ id: 'idea', label: 'Idea-like MCP', transport: 'streamable-http', url: server.url }],
+      cellTimeoutMs: 30_000,
+    })
+    try {
+      // The operation outlives the *cell* budget while the provider is still working: the kernel
+      // stops the cell, and the answer that was in flight belongs to a call nobody can read.
+      const overrun = await runtime.js('await cap.idea.slow({ ms: 5000 });', { timeoutMs: 1_200 })
+
+      expect(overrun.status).toBe('timeout')
+      // The two facts a reader needs: which call, and how long it had been running.
+      expect(overrun.output).toContain('in flight')
+      expect(overrun.output).toContain('idea.slow')
+      expect(overrun.output).toMatch(/idea\.slow \(\d+\.\d s\)/)
+      // ...and the move that fixes it, plus the caution about a half-applied side effect.
+      expect(overrun.output).toContain('longer timeoutMs')
+      expect(overrun.output).toContain('side-effecting')
+
+      // A cell that finishes on its own keeps its fire-and-forget calls to itself: no notice.
+      const fine = await runtime.js('nodeRepl.write("no notice here");', { timeoutMs: 5_000 })
+      expect(fine.output).not.toContain('in flight')
+    } finally {
+      await runtime.dispose()
+      await server.close()
+    }
+  }, 120_000)
+})

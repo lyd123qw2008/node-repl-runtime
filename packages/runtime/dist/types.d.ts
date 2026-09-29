@@ -133,6 +133,18 @@ export interface CatalogEntry {
     readonly label: string;
     readonly operations: readonly ProjectedOperation[];
 }
+/**
+ * A provider call still waiting for an answer that nothing can read any more.
+ *
+ * Named rather than counted: when a cell runs out of budget mid-operation, "one call was
+ * cancelled" leaves the reader guessing whether the casualty was a screenshot or a 20-minute
+ * build — and the two call for different next moves.
+ */
+export interface InFlightCall {
+    /** `provider.operation`, exactly as the cell asked for it. */
+    readonly name: string;
+    readonly elapsedMs: number;
+}
 /** A live connection to one MCP server, projected for the kernel. */
 export interface ProviderConnection {
     readonly id: string;

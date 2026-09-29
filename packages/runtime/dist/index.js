@@ -12,7 +12,7 @@ import { connectMcpProvider, unattachedHealth } from './catalog.js';
 import { createKernelRoot, startKernel } from './kernel.js';
 export * from './types.js';
 export { applyInjection, catalogEntries, connectMcpProvider, isSessionLoss, projectOperation, providerHealth, selectTools, unattachedHealth, } from './catalog.js';
-export { catalogRecoveryNotice } from './kernel.js';
+export { abandonedCallsNotice, catalogRecoveryNotice } from './kernel.js';
 // Pure functions of one provider reply, so they are asserted directly instead of through a
 // CONNECTED server — the same reason `projectOperation` and `selectTools` are exported.
 export { collectProviderImages, mergeProviderImages, PROVIDER_IMAGE_MAX_BYTES, PROVIDER_IMAGE_TOTAL_MAX_BYTES, } from './catalog.js';
