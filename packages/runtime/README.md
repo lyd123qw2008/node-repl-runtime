@@ -51,6 +51,8 @@ Provider configuration is generic: `id`, `label`, `transport` (`streamable-http`
 
 Providers connect **concurrently** at startup, so mounting three servers costs the slowest handshake rather than their sum. A call's deadline follows the work: the runtime requests progress notifications (`onprogress`, which is what makes the SDK attach `_meta.progressToken` at all) and lets each one renew the deadline (`resetTimeoutOnProgress`, which the SDK defaults to off). That is what keeps a five-minute IDE rebuild from being cancelled at the 300 s mark while the IDE is still working; a one-hour hard ceiling applies regardless, and the cell's own budget is the bound that normally matters.
 
+When a cell does end with provider calls still in flight — out of budget, cancelled, or crashed — the result names them (`idea.build_project (28.4 s)`) instead of reporting a bare timeout, because "the IDE was still working" and "the tool hung" call for different next moves. The cell budget default stays deliberately short for the same reason it exists: the kernel has one active-cell slot for the whole host process, so a larger default would let one stuck cell hold up every session.
+
 `node packages/runtime/dist/cli.js --id idea --url <endpoint>` attaches one server from the command line; without `--code` it prints the projected catalog.
 
 ## Boundaries, stated honestly
