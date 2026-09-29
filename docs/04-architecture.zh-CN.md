@@ -92,6 +92,13 @@ flowchart TD
 - **启动时不可达**的 provider 也不再是一去不返：它的 spec 被保留，`cap.reconnect(id)` 可以在运行期
   首次接入（`cap.status()` 会以 `attached: false` + 原因列出它）；只有 `disabled: true` 明确拒绝。
   详见 [`docs/08-mcp-session-recovery.zh-CN.md`](08-mcp-session-recovery.zh-CN.md)。
+- **provider 并发连接**：启动时几个 provider 的握手是并行的，所以启动成本是"最慢那个"而不是"它们的和"；
+  失败列表按配置顺序输出，不按谁先答完（否则同一份配置每次跑出来的 `capHelp()` 顺序都会变）；
+- **调用预算跟着活干走**：默认 300 s 只约束**静默**的调用——运行时会请求进度通知
+  （`onprogress`，SDK 只有拿到它才会附 `_meta.progressToken`）并让每条通知续期
+  （`resetTimeoutOnProgress`，SDK 默认是关的）。所以一次五分钟以上的 IDEA Rebuild 不会被
+  `Request timed out` 打断。真正的界仍是 **cell 预算**（cell 超时会 abort 该调用并让 SDK 发出取消），
+  另有 1 小时硬顶兜底；per-provider 可用 `timeoutMs` 覆盖。
 
 ## 3. 一次调用的路径
 
