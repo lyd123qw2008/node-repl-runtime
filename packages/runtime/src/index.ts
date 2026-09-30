@@ -9,7 +9,7 @@
 
 import { fileURLToPath } from 'node:url'
 import { startBridge } from './bridge.js'
-import { connectMcpProvider, unattachedHealth } from './catalog.js'
+import { connectMcpProvider, describeProviderError, unattachedHealth } from './catalog.js'
 import { createKernelRoot, startKernel } from './kernel.js'
 import type {
   JsCellResult,
@@ -25,7 +25,9 @@ export * from './types.js'
 export {
   applyInjection,
   catalogEntries,
+  classifySessionLoss,
   connectMcpProvider,
+  describeProviderError,
   isSessionLoss,
   projectOperation,
   providerHealth,
@@ -121,7 +123,7 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
     const spec = url === undefined ? entry.spec : { ...entry.spec, url }
     const attempt = connect(spec)
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = describeProviderError(error)
         unattached.set(id, { spec: entry.spec, error: message })
         console.warn(`[node-repl-runtime] provider ${id} could not be attached: ${message}`)
         throw error
@@ -151,7 +153,7 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
       // Match the optional MCP-client startup policy: a provider that will not
       // connect contributes no capabilities, but it must not take the runtime
       // down. Other providers — including none — can still be used.
-      const message = error instanceof Error ? error.message : String(error)
+      const message = describeProviderError(error)
       unattached.set(spec.id, { spec, error: message })
       console.warn(`[node-repl-runtime] provider ${spec.id} failed to connect: ${message}`)
     }

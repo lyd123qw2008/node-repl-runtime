@@ -132,39 +132,72 @@ export function mergeProviderImages(value, collected) {
     return { _value: value, ...extras };
 }
 /**
+ * Classify an error as a lost session, if that is what it is.
+ *
+ * Measured against SDK 2.0, because the obvious reading is wrong in two places.
+ *
+ * First, the streamable-HTTP transport reports *every* non-OK POST as the same `SdkHttpError` code
+ * (`CLIENT_HTTP_NOT_IMPLEMENTED`), so the code says nothing and the HTTP status is the only signal.
+ * The MCP spec has a server answer `404` for a session it does not know, and that is exactly what
+ * IDEA does after a restart — "Streamable HTTP session not found", with the call rejected rather
+ * than run.
+ *
+ * Second, the SDK's *request* path rejects a dead transport with a plain
+ * `new Error("Not connected")` — no `code` at all (dist/src-D_zzAWoS.mjs:6063,
+ * `_requestWithSchemaViaCodec`); only its notification path uses `SdkErrorCode.NotConnected`
+ * (…:6181). Matching that message is therefore the only way to see the shape, and it is the shape
+ * that matters most for stdio: when a child exits, the transport's own `close` handler clears the
+ * client's transport, so the *next* call takes exactly this path — a provider dead until the host
+ * restarts unless it is classified here.
+ */
+export function classifySessionLoss(error) {
+    if (error === null || typeof error !== 'object')
+        return undefined;
+    const { status, code, message } = error;
+    if (status === 404)
+        return 'never-ran';
+    if (code === SdkErrorCode.NotConnected)
+        return 'never-ran';
+    // The transport dropped while the client was waiting: in flight, so possibly already executing.
+    if (code === SdkErrorCode.ConnectionClosed)
+        return 'maybe-ran';
+    if (message === 'Not connected')
+        return 'never-ran';
+    // Undici's report for a request that never completed, which cannot be told apart from one that
+    // died mid-response from the caller's side.
+    if (error instanceof TypeError && message === 'fetch failed')
+        return 'maybe-ran';
+    return undefined;
+}
+/**
  * Whether an error means the session the client is holding is gone.
  *
- * Measured against SDK 2.0, because the obvious reading is wrong: the streamable-HTTP
- * transport reports *every* non-OK POST as the same `SdkHttpError` code
- * (`CLIENT_HTTP_NOT_IMPLEMENTED`), so the code says nothing and the HTTP status is the only
- * signal available. The MCP spec has a server answer `404` for a session it does not know,
- * and that is exactly what IDEA does after a restart — "Streamable HTTP session not found".
- *
- * Two other endings belong to the same class, and each is safe to retry because nothing was
- * delivered:
- *
- *   - the transport is gone (`NOT_CONNECTED`/`CONNECTION_CLOSED`: a closed SSE stream, a dead
- *     stdio child), which the SDK reports as its own codes;
- *   - the request never completed at all, which undici reports as `TypeError: fetch failed`
- *     with the real errno hidden on `cause`. This is what a call made while the IDE is still
- *     coming back up looks like, and recovering from it needs no more than the retry below.
- *
- * A tool that failed *on the server* is deliberately not in this set: it answers with a
- * result, not with a transport error, and retrying it would repeat a side effect.
+ * A tool that failed *on the server* is deliberately not in this set: it answers with a result, not
+ * with a transport error, and retrying it would repeat a side effect.
  */
 export function isSessionLoss(error) {
-    if (error === null || typeof error !== 'object')
-        return false;
-    const { status, code } = error;
-    if (status === 404)
-        return true;
-    if (code === SdkErrorCode.NotConnected || code === SdkErrorCode.ConnectionClosed)
-        return true;
-    return error instanceof TypeError && error.message === 'fetch failed';
+    return classifySessionLoss(error) !== undefined;
 }
 /** One line about a failure, for a message that has to carry two of them. */
 function describe(error) {
     return error instanceof Error ? error.message : String(error);
+}
+/** How much of a provider's error text is relayed. A gateway's HTML page is not a diagnosis. */
+const MAX_PROVIDER_ERROR_CHARS = 2_000;
+/**
+ * One line about a provider failure, bounded.
+ *
+ * The SDK builds its HTTP error message out of the whole response body — `Error POSTing to
+ * endpoint: ${body}` — with no cap (dist/index.mjs:5360,5382). Relayed verbatim, a proxy or a
+ * gateway answering with an HTML page would arrive as kilobytes: into the kernel's heap, and from
+ * there into the model's context. The cut is marked, because a reader has to know the message is
+ * not the whole story.
+ */
+export function describeProviderError(error) {
+    const text = describe(error);
+    if (text.length <= MAX_PROVIDER_ERROR_CHARS)
+        return text;
+    return `${text.slice(0, MAX_PROVIDER_ERROR_CHARS)}… [${text.length - MAX_PROVIDER_ERROR_CHARS} more characters]`;
 }
 /**
  * Budget for one provider call that reports no progress. Overridable per provider.
@@ -252,6 +285,8 @@ export function unattachedHealth(spec, error) {
  */
 async function openClient(spec, url) {
     const client = new Client({ name: 'node-repl-runtime', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } });
+    /** Reads out the child's stderr tail. Empty for HTTP, and until something is written. */
+    let stderrTail = () => '';
     try {
         if (spec.transport === 'streamable-http') {
             if (url === undefined)
@@ -261,19 +296,55 @@ async function openClient(spec, url) {
         else {
             if (spec.command === undefined)
                 throw new Error(`provider ${spec.id}: transport stdio requires command`);
-            await client.connect(new StdioClientTransport({
+            const transport = new StdioClientTransport({
                 command: spec.command,
                 args: [...(spec.args ?? [])],
                 ...spec.cwd === undefined ? {} : { cwd: spec.cwd },
                 ...spec.env === undefined ? {} : { env: { ...spec.env } },
-            }));
+                // Piped rather than the SDK's `inherit` default, so a server that dies at startup can say
+                // why in `failures`/`capHelp()` — the host's own stderr is not where anyone looks when a
+                // capability is simply missing. `forwardStderr` still writes the bytes through to stderr, so
+                // a live child's output stays exactly as visible as it was.
+                stderr: 'pipe',
+            });
+            // Attached before `connect()`: the SDK hands back the stream immediately precisely so early
+            // output is not lost.
+            stderrTail = forwardStderr(transport.stderr);
+            await client.connect(transport);
         }
         return client;
     }
     catch (error) {
         await client.close().catch(() => { });
-        throw error;
+        const tail = stderrTail();
+        // The SDK's own message for a child that exited is about the connection; the child's last words
+        // are the diagnosis. Both, with the tail last so it reads as the epilogue.
+        if (tail === '')
+            throw error;
+        throw new Error(`${describeProviderError(error)}\n[stderr] ${tail}`);
     }
+}
+/** How much of a failed child's stderr to keep. Enough for a stack trace's point, not for a novel. */
+const STDERR_TAIL_CHARS = 2_000;
+/**
+ * Follow a child's stderr, and hand back a reader for its last {@link STDERR_TAIL_CHARS}.
+ *
+ * The bytes are still written through to this host's stderr, which is what the SDK's `inherit`
+ * default did: capturing them must not make a live server's logging disappear, only make the last
+ * words available to a failure message.
+ */
+function forwardStderr(stream) {
+    const readable = stream;
+    if (readable === null || typeof readable?.on !== 'function')
+        return () => '';
+    let tail = '';
+    readable.setEncoding?.('utf8');
+    readable.on('data', (chunk) => {
+        process.stderr.write(chunk);
+        tail = (tail + chunk).slice(-STDERR_TAIL_CHARS);
+    });
+    readable.on('error', () => { });
+    return () => tail.trim();
 }
 /** Open one MCP session, with the recovery a long-lived host needs. Nothing is persisted. */
 export async function connectMcpProvider(spec) {
@@ -289,6 +360,29 @@ export async function connectMcpProvider(spec) {
         pending: undefined,
         closed: false,
     };
+    /**
+     * Calls in flight per client, so a client that has been replaced can close once it is quiet.
+     *
+     * Keyed by the client itself rather than counted globally: the question is always "does *this*
+     * one still have a reader".
+     */
+    const inFlightByClient = new WeakMap();
+    /** Clients a runtime-decided reconnect set aside; closed as soon as their last call settles. */
+    const retiring = new Set();
+    const retire = (client) => {
+        if ((inFlightByClient.get(client) ?? 0) === 0) {
+            void client.close().catch(() => { });
+            return;
+        }
+        retiring.add(client);
+    };
+    const release = (client) => {
+        const remaining = (inFlightByClient.get(client) ?? 1) - 1;
+        inFlightByClient.set(client, remaining);
+        // The detached client's last caller has its answer: nothing will read anything else from it.
+        if (remaining <= 0 && retiring.delete(client))
+            void client.close().catch(() => { });
+    };
     /** Connect and discover as one unit: a client without a catalog is not a session yet. */
     const establish = async (url) => {
         const client = await openClient(spec, url);
@@ -303,10 +397,20 @@ export async function connectMcpProvider(spec) {
     /**
      * The re-open itself, without the single-flight wrapper.
      *
-     * Deliberately closes the old client *before* opening the new one. For stdio the old child
-     * must die or every reconnect leaks one, and for HTTP the old session is dead by definition —
-     * this path only runs once the client has been told so. Validation happens before the close,
-     * so a bad `url` override cannot cost a session that still works.
+     * What happens to the old client depends on *who* asked, and the difference is not cosmetic:
+     *
+     *   - a reconnect the runtime decided on (a call found the session gone) **detaches** it — the
+     *     old client stays open until the calls still in flight on it settle, then closes itself.
+     *     Closing immediately aborts those calls, and an aborted call is indistinguishable from a
+     *     connection that died mid-request: `maybe-ran`, which for a mutating operation means
+     *     refusing a retry the server would have allowed. Measured: without this, one of five
+     *     concurrent mutations failed that way, and the server had never rejected it;
+     *   - an operator's `cap.reconnect(id)` **closes** it, because "reset this provider" is the
+     *     request and the old session is exactly what is being thrown away. For stdio that also
+     *     reaps the child, which a detach would leak.
+     *
+     * Validation happens before either, so a bad `url` override cannot cost a session that still
+     * works.
      */
     const reopen = async (options) => {
         if (live.closed)
@@ -321,8 +425,12 @@ export async function connectMcpProvider(spec) {
         live.state = 'reconnecting';
         const previous = live.client;
         live.client = undefined;
-        if (previous !== undefined)
-            await previous.close().catch(() => { });
+        if (previous !== undefined) {
+            if (options?.closePrevious === true)
+                await previous.close().catch(() => { });
+            else
+                retire(previous);
+        }
         try {
             const opened = await establish(url);
             // Disposal can land mid-reconnect: this process is going away, so the session that was
@@ -369,6 +477,14 @@ export async function connectMcpProvider(spec) {
         ...live.lastError === undefined ? {} : { lastError: live.lastError },
         ...live.url === undefined ? {} : { url: live.url },
     });
+    /**
+     * What the server declared about an operation's side effects.
+     *
+     * Informational by design — `readOnlyHint` is the server's own claim and never a gate on calling
+     * the operation. It is a gate on *retrying* it, though, and absence means "assume it mutates":
+     * that costs a retry after an ambiguous failure and never doubles a side effect.
+     */
+    const operationSafety = (operation) => live.operations.find(candidate => candidate.name === operation)?.safety ?? 'mutate';
     const call = async (operation, args, signal) => {
         // Refusing a caller-supplied host-owned argument happens before anything is opened or sent:
         // it is a bug in the cell, not in the provider's session.
@@ -377,6 +493,18 @@ export async function connectMcpProvider(spec) {
             const client = live.client;
             if (client === undefined)
                 throw new Error(`provider ${spec.id} has no open session`);
+            // Counted per client and released in `finally`: a client that gets replaced while this call is
+            // in flight stays open until the call settles, so the reconnect cannot abort it into an
+            // ambiguous failure.
+            inFlightByClient.set(client, (inFlightByClient.get(client) ?? 0) + 1);
+            try {
+                return await callOn(client);
+            }
+            finally {
+                release(client);
+            }
+        };
+        const callOn = async (client) => {
             const result = await client.callTool({ name: operation, arguments: withInjected }, {
                 // A long IDE operation — a full rebuild, a terminal command running a test suite —
                 // reports progress for minutes, so the deadline has to follow the work rather than the
@@ -423,9 +551,21 @@ export async function connectMcpProvider(spec) {
         catch (error) {
             // An aborted call is the caller's own doing, not a lost session: nothing can read the
             // answer, so re-sending the request would be work done for nobody.
-            if (signal?.aborted === true || !isSessionLoss(error))
+            const loss = signal?.aborted === true ? undefined : classifySessionLoss(error);
+            if (loss === undefined)
                 throw error;
             const lost = error;
+            // Whether a retry is provably free of side effects depends on *how* the session was lost.
+            // A call the server rejected (404) or one whose transport was already gone was never sent,
+            // so re-sending it is a repair. A connection that failed with the request in flight proves
+            // nothing about whether the tool started — and for a mutating operation a blind retry is how
+            // one deploy becomes two. Those follow the rule this file already applies to server-reported
+            // errors (`isError` is an answer, not a transport failure): read-only calls retry, mutations
+            // get an error that says what is actually known.
+            if (loss === 'maybe-ran' && operationSafety(operation) !== 'read') {
+                throw new Error(`provider ${spec.id}: ${describeProviderError(lost)} — the connection failed with the request in flight, `
+                    + 'so it may already have run; not retried automatically (check the operation\'s effect and re-run it only if it did not happen)');
+            }
             try {
                 await reconnect();
             }
@@ -434,7 +574,7 @@ export async function connectMcpProvider(spec) {
                 // would not come back. A message naming only one of them sends the reader to the wrong
                 // place — "session not found" alone reads as a client bug when the real news is that
                 // nothing is listening.
-                throw new Error(`provider ${spec.id}: ${describe(lost)} (reconnecting did not help: ${describe(reconnectError)})`);
+                throw new Error(`provider ${spec.id}: ${describeProviderError(lost)} (reconnecting did not help: ${describeProviderError(reconnectError)})`);
             }
             // Exactly one retry, on the fresh session. A second failure is reported as it stands:
             // retrying a non-idempotent tool more than once is how one side effect becomes three.
@@ -454,7 +594,9 @@ export async function connectMcpProvider(spec) {
         session: {
             health,
             async reconnect(options) {
-                await reconnect(options);
+                // Explicit, so the old session goes for good: this is the operator's "reset the provider",
+                // not the runtime repairing one a call found dead (which detaches instead — see `reopen`).
+                await reconnect({ ...options, closePrevious: true });
                 return health();
             },
         },
@@ -463,6 +605,11 @@ export async function connectMcpProvider(spec) {
             live.closed = true;
             await live.client?.close().catch(() => { });
             live.client = undefined;
+            // A detached client outlives its replacement by design; shutting down still reaps it, or a
+            // stdio child would survive the runtime that started it.
+            for (const client of retiring)
+                await client.close().catch(() => { });
+            retiring.clear();
         },
     };
 }

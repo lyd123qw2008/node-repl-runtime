@@ -20,6 +20,8 @@ interface AdvertisedTool {
   readonly name: string
   readonly description: string
   readonly inputSchema: Record<string, unknown>
+  /** The server's own side-effect declaration, relayed into `ProjectedOperation.safety`. */
+  readonly annotations?: Record<string, unknown>
 }
 
 const DEFAULT_TOOLS: readonly AdvertisedTool[] = [
@@ -27,23 +29,26 @@ const DEFAULT_TOOLS: readonly AdvertisedTool[] = [
     name: 'echo',
     description: 'Echo the arguments back.',
     inputSchema: { type: 'object', properties: { value: { type: 'string' } } },
+    annotations: { readOnlyHint: true },
   },
   {
     name: 'get_file_problems',
     description: 'Problems the IDE found, as the real server reports them.',
     inputSchema: { type: 'object', properties: { projectPath: { type: 'string' } } },
+    annotations: { readOnlyHint: true },
   },
   {
     // The long-operation stand-in: it can answer quietly (which is what the request deadline
     // bounds) or report progress while it works (which is what renews that deadline). Progress has
     // to travel on an SSE response stream, because a notification cannot share one JSON body with
-    // the result it precedes.
+    // the result it precedes. Declared as a mutation, so retry policy can be tested against it.
     name: 'slow',
     description: 'Sleep for `ms`, optionally reporting progress every `progressEveryMs`.',
     inputSchema: {
       type: 'object',
       properties: { ms: { type: 'number' }, progressEveryMs: { type: 'number' } },
     },
+    annotations: { readOnlyHint: false },
   },
 ]
 
@@ -60,6 +65,21 @@ export interface IdeaLikeServer {
   calls(): number
   /** Forget every session id, leaving the URL and the tools in place. */
   restart(): void
+  /**
+   * Kill the connection on the next tool call, without answering it.
+   *
+   * The ambiguous ending: the request was delivered, so the server *may* have run the tool. What a
+   * client does next is a policy decision, and this is how a test can pose it.
+   */
+  dropNextCall(): void
+  /**
+   * Answer the next tool call with an HTTP error and a body of odyChars characters.
+   *
+   * A gateway or proxy answering with an HTML page is what this stands in for: the SDK folds the
+   * whole body into its error message (Error POSTing to endpoint: <body>), which is why the
+   * runtime bounds what it relays.
+   */
+  failNextCall(bodyChars: number): void
   /** Advertise one more tool from now on, as installing a plugin would. */
   addTool(name: string): void
   close(): Promise<void>
@@ -96,6 +116,10 @@ export async function startIdeaLikeServer(
   let sessionCount = 0
   let listingCount = 0
   let callCount = 0
+  /** One-shot: the next tool call is delivered and then the socket is destroyed. */
+  let dropNextCall = false
+  /** One-shot: the next tool call is answered with an HTTP error carrying a body this long. */
+  let failNextCallWith = 0
 
   const server: Server = createServer((request, response) => {
     void (async () => {
@@ -182,6 +206,19 @@ export async function startIdeaLikeServer(
 
       if (requestMessage.method === 'tools/call') {
         callCount += 1
+        if (failNextCallWith > 0) {
+          const chars = failNextCallWith
+          failNextCallWith = 0
+          response.writeHead(500, { 'content-type': 'text/html' })
+          response.end('x'.repeat(chars))
+          return
+        }
+        if (dropNextCall) {
+          dropNextCall = false
+          // Delivered but unanswered: the client cannot tell whether the tool ran.
+          response.destroy()
+          return
+        }
         const params = (requestMessage as {
           params?: { name?: string; arguments?: unknown; _meta?: { progressToken?: unknown } }
         }).params ?? {}
@@ -263,6 +300,12 @@ export async function startIdeaLikeServer(
     sessions: () => sessionCount,
     listings: () => listingCount,
     calls: () => callCount,
+    dropNextCall() {
+      dropNextCall = true
+    },
+    failNextCall(bodyChars: number) {
+      failNextCallWith = Math.max(1, Math.trunc(bodyChars))
+    },
     restart() {
       liveSessions.clear()
     },
