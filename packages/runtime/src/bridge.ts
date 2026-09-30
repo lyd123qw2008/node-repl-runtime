@@ -24,7 +24,7 @@
 
 import { createServer, type Server } from 'node:net'
 import { randomBytes } from 'node:crypto'
-import { catalogEntries, providerHealth } from './catalog.js'
+import { catalogEntries, describeProviderError, providerHealth } from './catalog.js'
 import type {
   CatalogEntry,
   InFlightCall,
@@ -164,7 +164,7 @@ export async function startBridge(
         } catch (error) {
           return fail(
             'MCP_ATTACH_FAILED',
-            `provider ${target} is not attached and could not be connected: ${error instanceof Error ? error.message : String(error)}`,
+            `provider ${target} is not attached and could not be connected: ${describeProviderError(error)}`,
             snapshot(),
           )
         }
@@ -183,7 +183,7 @@ export async function startBridge(
       } catch (error) {
         return fail(
           'MCP_RECONNECT_FAILED',
-          `provider ${target} could not be re-opened: ${error instanceof Error ? error.message : String(error)}`,
+          `provider ${target} could not be re-opened: ${describeProviderError(error)}`,
           snapshot(),
         )
       }
@@ -220,7 +220,7 @@ export async function startBridge(
       }
       // A failed call may still have rebuilt the session before failing: the catalog is
       // reported either way, or the kernel would keep a tool list from a dead session.
-      return fail('MCP_CALL_FAILED', error instanceof Error ? error.message : String(error), rebuilt())
+      return fail('MCP_CALL_FAILED', describeProviderError(error), rebuilt())
     } finally {
       inFlight.delete(controller)
     }

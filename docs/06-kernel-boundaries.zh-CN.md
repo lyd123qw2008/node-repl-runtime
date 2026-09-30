@@ -121,6 +121,22 @@
 - **Codex**：`max_heap_size_bytes` 是**协议的一部分**（`code-mode-protocol/src/session.rs:30`），但 `InProcessCodeModeSession::with_limits()` **显式覆写成 `None`**；边界完全在 OS 层（受限账号、`codex-command-runner`、防火墙）。本机 `node_repl.exe` 二进制里也没有 `max-old-space-size` / `rlimit` / `memory_limit` 字符串，但有 `sandbox` / `CODEX_CLI_PATH` / `guardian` / `active_execs`。
 - 真正设了内存上限的两家都是**每次新执行**的形态：Pi 的 QuickJS（同进程 wasm VM，`memoryLimitBytes`）与 DSH PTC（每程序 512 MB）。
 
+**2026-09-29 更新（Pi 正式版落地）**：那批 code mode + MCP 工作已在 **v0.99.0 / v0.99.1** 正式发布
+（PR #10040 显示 CLOSED，但作者注明 squash-merge 成 main 的 `8562bcf66`；npm 上
+`@earendil-works/pi-codemode@0.99.1`、`pi-mcp@0.99.1` 同日在 18:18 发布）。正式版与我们相关的两点：
+
+1. **成本模型仍是"有预算的内联声明"**：暴露模型扩到 `codemode`（默认，列进 codemode 描述）/
+   `codemode-deferred` / `deferred`（等 `tool_search` 加载）/ `hidden`（+`direct`），
+   `codemode.inlineBudget = 3000` 估计 token，超出部分靠脚本内 `searchTools()`；
+   `tool_search` 默认关、codemode 本身也需显式加入默认工具集（有 codemode 暴露的服务器会自动激活）。
+   我们仍是**零声明 + 沙箱内发现**（`capHelp()` / `cap.describe()`），149 个操作与 1 个同价。
+2. **重试策略与我们是同一条判据**：会话过期无条件重试一次（旧 client **detach 不 close**），
+   而**瞬时 HTTP 错误只在 readOnly 请求上重试**。我们据此回头核对自己的实现，修掉了两个真问题：
+   ① SDK 请求路径那个无 code 的 `Error("Not connected")`（漏判 → stdio provider 死了只能重启宿主）；
+   ② 我们自己重连时**先 close 共享 client**，把同类在飞 mutate 调用打断成 `maybe-ran` 而被拒——
+   实测 5 个并发里 1 个失败，改成 detach-and-drain 后 5/5 正常。
+   详见 [`docs/08-mcp-session-recovery.zh-CN.md`](08-mcp-session-recovery.zh-CN.md) §3.1/§3.2。
+
 **结论**：CLI 里这个问题不存在，是因为那里**不需要做决定**；我们把它接进常驻服务，就必须自造作用域或接受它。我们选择**接受**，理由是活对象就是价值。这条取舍是第一段那张表的全部含义。
 
 ## 6. 什么时候应该回头做（可观测扳机）
@@ -131,7 +147,9 @@
 2. 进程审计里出现孤儿（`engram` / `cua-driver` / `node` / 内核）；
 3. 内核子进程 RSS 涨到 GB 级，或 `nodeRepl.getHeapStatus()` 报接近 `heapLimitBytes`；
 4. 你开始**同时跑多个会话**，并观察到绑定互相干扰，或 `js_reset` 清掉了别人的状态；
-5. **`js_reset` 丢绑定的代价开始明显小于继续跑的代价**（例如浏览器/桌面会话里，活对象价值被堆压力反复打断）——那时才谈天花板或提示，而不是现在。反过来，第 3 条的量化（`heapUsedBytes` / `heapLimitBytes`）也说明这不是"感觉快满了"，得有数字。
+5. **`js_reset` 丢绑定的代价开始明显小于继续跑的代价**（例如浏览器/桌面会话里，活对象价值被堆压力反复打断）——那时才谈天花板或提示，而不是现在。反过来，第 3 条的量化（`heapUsedBytes` / `heapLimitBytes`）也说明这不是"感觉快满了"，得有数字；
+6. **挂上一个会"运行期改工具表"的服务端**（MCP gateway / registry 之类，`notifications/tools/list_changed` 真的会发）：那时才给目录加 revision + 推送机制。现在的 provider（IDEA/Playwright/Cua/CheatEngine）都是重启才变，而重启同时掉会话、已被重连路径覆盖；运行期变了的后果也良性（多的看不见→`cap.refresh()`；少的→明确的 `UNKNOWN_OPERATION`）；
+7. **观察到某个 provider 被 `Promise.all` 扇出打崩**（或明显变慢/丢弃请求）：那时给 bridge 加**每 provider 的硬上限 + 明确报错**（不做静默排队——排队会改变延迟语义，还可能把问题藏起来）。现在只是"极端下没有明确行为"，不会做错事。
 
 ## 7. 如果要做，最小的三件
 

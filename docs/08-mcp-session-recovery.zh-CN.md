@@ -67,26 +67,56 @@ readonly session?: ProviderSession   // { health(): ProviderHealth; reconnect(op
 - `operations` 改成 **getter**：重建过的会话可能在服务不同的工具表，
   缓存第一份的调用方会一直提供服务器已经没有的操作；
 - `reconnect()` 是 **single-flight** 的：并发调用共享同一次重连，不会抢着开多个会话；
-- 先关旧 client 再开新的：stdio 不关就每次重连泄漏一个子进程；HTTP 走到这条路径时旧会话本来就已经死了。
-  校验新的 `url` 覆盖发生在关闭**之前**，一个写错的 url 不能把还能用的会话一起搭进去；
+- **旧 client 怎么处理取决于谁发起的**：运行时自己决定的重连（某次调用发现会话没了）**脱离**旧 client——
+  它保持打开，等还在它身上飞的调用结算完自动关闭。立刻关闭会把那些调用打断，而"被 abort 的调用"与
+  "请求在飞时连接断了"无法区分（`maybe-ran`），对 mutate 操作就意味着**拒绝一次本可安全进行的重试**
+  （实测：不这么做时，5 个并发 mutate 里有 1 个这样失败，而服务端从未拒绝过它）。
+  操作者的 `cap.reconnect(id)` 则**立即关闭**——"重置这个 provider"就是请求本身，而且 stdio 必须杀掉子进程，
+  否则每次重连漏一个。
+  校验新的 `url` 覆盖发生在两者之前，一个写错的 url 不能把还能用的会话一起搭进去；
 - 失败时记下 `state: 'failed'` 与 `lastError`——失败原因是被保留的事实，不是日志。
 
-### 3.2 `call()`：失效 → 重连一次 → 重试一次
+### 3.2 `call()`：按"能不能证明没执行"决定是否重试
+
+重试不是一种，而是两种——区别在于**能不能证明那次调用没被服务端执行**：
 
 ```text
 call(op, args)
-  ├─ 会话失效（isSessionLoss）
-  │    ├─ 重连（single-flight）
-  │    │    └─ 重连也失败 → 抛出"两个事实都带上"的错误：
-  │    │       provider idea: <原始错误> (reconnecting did not help: <重连错误>)
-  │    └─ 在新会话上重试一次；再失败就原样抛出（不再重试）
+  ├─ classifySessionLoss(error)
+  │    ├─ never-ran（可以证明没执行）→ 无条件重连一次 + 重试一次
+  │    │    · HTTP 404（会话不存在：服务端直接拒绝，没跑工具）
+  │    │    · SdkErrorCode.NotConnected（传输在发送前就没了）
+  │    │    · Error("Not connected") —— SDK 请求路径的形态，无 code（见下）
+  │    └─ maybe-ran（无法证明）→ 只有该操作 safety === 'read' 才自动重试
+  │         · SdkErrorCode.ConnectionClosed（请求在飞时连接断了）
+  │         · TypeError: fetch failed（undici 无法区分"没连上"和"响应中断"）
+  │         └─ mutate：抛出可读错误，不重试
+  │            provider idea: <原始错误> — the connection failed with the request in
+  │            flight, so it may already have run; not retried automatically
+  ├─ 重连也失败 → <原始错误> (reconnecting did not help: <重连错误>)
   └─ 其它错误：原样抛出（工具真的失败，不是会话问题）
 ```
 
+三条依据，都不是风格问题：
+
+- **`Error("Not connected")` 必须认**：SDK 2.0 的*请求*路径在传输已死时抛的是**普通 Error、没有 code**
+  （`dist/src-D_zzAWoS.mjs:6063`，`_requestWithSchemaViaCodec`）；只有通知路径用
+  `SdkErrorCode.NotConnected`（…:6181）。而 stdio 子进程一死，transport 的 `close` 处理器就清掉
+  客户端的 transport，于是**下一次调用正好走这条无 code 的路**——不认它就等于
+  "stdio provider 死了只能重启宿主"，和我们修 HTTP/404 前是同一个 bug。
+  这条由测试盯住：杀掉 stdio fixture 的子进程，下一次调用必须透明换成新 pid。
+- **mutate 不重试**：请求在飞时断连，服务端可能已经执行（一次部署变两次）。
+  判据用服务端自己声明的 `annotations.readOnlyHint`（即 `ProjectedOperation.safety`），
+  **缺省按 mutate 处理**：代价是少一次自动重试，绝不是多一次副作用。
+  这与本文件已有的"`isError` 是结果不是传输失败"是同一条原则的延伸。
 - **只重试一次**：非幂等工具重试多次就是一次副作用变三次；
 - 两个失败原因都要出现在消息里："session not found" 单独出现会把读者引向客户端 bug，
   而当时真正的事实是**没有东西在监听**；
 - 调用已 `abort`（cell 被取消/超时，宿主 `abandonInFlight`）时**不重连**：没人能读的答案不值得再发一次。
+
+> 2026-09-29 补充：Pi 正式版（v0.99.0/v0.99.1，squash-merge `8562bcf66`）里的 MCP 连接层
+> 采用了同样的分档——会话过期无条件重试一次（旧 client **detach 不 close**），
+> **瞬时 HTTP 错误只在 readOnly 请求上重试**。我们是独立走到这条判据上的，事后对照相互印证。
 
 ### 3.3 恢复要对内核可见
 
@@ -137,9 +167,23 @@ call(op, args)
   "去哪了"必须能回答，这是本仓库一贯的发现面原则；
 - 接入成功后该条立即从 `failures` 移除，`capHelp()` 与内核命名空间随回包一起更新。
 
+### 3.5 让失败可读：两个上限
+
+这两条不是恢复机制，但决定"失败"能不能被读懂，也都是正式版对照带出来的：
+
+- **转发的错误文本有上限（2,000 字符）**：SDK 把**整个响应体**拼进错误消息
+  （`Error POSTing to endpoint: ${body}`，`dist/index.mjs:5360/5382`，无上限）。我们过去原样转发，
+  于是一个代理/网关回 HTML 错误页时，几 KB 会进内核堆、再进模型上下文。
+  现在 `describeProviderError()` 是唯一出口（bridge 的三处 `fail(...)`、`failures`/`capHelp()` 的消息、
+  以及我们自己的包装错误都走它），并在截断处标出还差多少字符——读者必须知道这不是全文；
+- **stdio 子进程的 stderr 尾巴（2,000 字符）会被带进失败原因**：SDK 对"子进程退出"只说连接关闭，
+  而真正的原因写在子进程的 stderr 上。我们把 transport 的 `stderr` 设成 `'pipe'`（getter 在 `start()`
+  之前就可用，所以早期输出不会漏），**同时仍然把这些字节照写宿主 stderr**——捕获不能让运行中的
+  服务端日志从日志里消失，只是让最后几句话能出现在 `failures`/`capHelp()` 里。
+
 ## 4. 验证
 
-全部 hermetic（无网络、无 IDE），共 12 个用例，分两个文件：
+全部 hermetic（无网络、无 IDE），三个 provider 行为文件共 21 个用例（7 + 6 + 8）：
 
 `packages/runtime/tests/session-recovery.test.ts`（7 个）：
 
@@ -151,9 +195,26 @@ call(op, args)
 | 真的不可达 | cell 拿到可读错误（含 provider 名与原因），`cap.status()` 报 `state: "failed"` + `lastError`——**不会伪装成成功** |
 | 健康面 | `cap.status()` 报 `attached: true` / `reconnectable: true` / `operations: 2` |
 | 无会话的连接 | `cap.reconnect('fake')` 明确拒绝，不假装重连过 |
-| 分类（纯函数） | 404 / `NOT_CONNECTED` / `CONNECTION_CLOSED` / `fetch failed` → true；500、普通错误、`undefined` → false |
+| 分类（纯函数） | `SdkHttpError(404)` / `NOT_CONNECTED` / `Error("Not connected")` → `never-ran`；`CONNECTION_CLOSED` / `fetch failed` → `maybe-ran`；500、普通工具错误、`undefined` → `undefined` |
 
-`packages/runtime/tests/provider-attach.test.ts`（5 个）：
+`packages/runtime/tests/provider-transport-loss.test.ts`（8 个，2026-09-29 补）：
+
+| 用例 | 断言 |
+| --- | --- |
+| stdio 子进程被杀 | 杀掉 fixture 子进程后**下一次调用透明恢复**，且由**新 pid** 服务（旧实现会一直报 `Not connected`） |
+| 只读操作遇在飞断连 | 读操作自动重连+重试成功：`sessions()===2`、`calls()===2` |
+| mutate 操作遇在飞断连 | **不重连、不重试**：错误含 `may already have run` / `not retried automatically`，`sessions()===1`、`calls()===1`（用请求计数证明没有第二次副作用） |
+| 并发 mutate 遇会话失效 | 5 个并发 mutate 里有一个触发重连时，**其余 4 个必须仍被正常服务**（`ok` ×5，无 `err:`）——旧实现会关掉共享 client，把它们打断成 `maybe-ran` 而被拒（实测 5 个中 1 个） |
+| stdio 启动即死 | 失败原因里带着**子进程的 stderr 尾巴**（`missing dependency: zod is not installed`），而不是只有 SDK 的 "Connection closed" |
+| 网关式大错误体 | 50 KB 的 HTTP 错误体经我们转发后 **< 4 KB** 且带截断标记；500 不是会话失效，所以**不重试**（服务端只收到 1 次） |
+| 错误文本上限（纯函数） | 5,000 字符的消息被截到 < 2,200 并带 `more characters` 标记；短消息原样 |
+| 分类纯函数 | 上表那六种形态各自归到 `never-ran` / `maybe-ran` / `undefined` |
+
+反向验证（三处改动都不是摆设）：把 `Error("Not connected")` 那支注释掉、只读门反过来，**4 个断言同时变红**
+（stdio 那条直接报 `Not connected`，mutate 那条**重试后成功**——正是要避免的双重副作用）；
+把 `stderr` 换回 `'inherit'`、去掉错误文本上限各让对应用例变红。
+
+`packages/runtime/tests/provider-attach.test.ts`（6 个，含并发连接）：
 
 | 用例 | 断言 |
 | --- | --- |
@@ -163,7 +224,7 @@ call(op, args)
 | `disabled` / 未知 id | 分别以"configured with disabled: true"和"unknown provider"拒绝 |
 | 内核被替换后 | 运行期接入的 provider 与 `capHelp()` 都不会倒退到启动快照（覆盖 §3.3 第 4 点） |
 
-回归：`packages/runtime` 44 个、`adapter-dsh` 15 个、`dsh-bootstrap` 7 个测试全绿（`pnpm run verify`），
+回归：`packages/runtime` **57 个**、`adapter-dsh` 15 个、`dsh-bootstrap` 7 个测试全绿（`pnpm run verify`，共 79 个），
 stdio provider 与内核路径行为未变。修复实测前后的对比是同一份复现用例：
 修复前 cell 报 `MCP_CALL_FAILED: Error POSTing to endpoint: Streamable HTTP session not found`
 （与生产现场逐字一致），修复后返回结果。

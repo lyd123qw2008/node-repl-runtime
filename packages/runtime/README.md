@@ -27,6 +27,8 @@ Four non-enumerable helpers sit on `cap` beside the providers (`Object.keys(cap)
 
 A provider whose server restarted is reconnected and retried **once, transparently**, inside the failing call; the refreshed catalog rides back with the reply, so the next statement in the same cell sees it. `cap.reconnect` is the explicit exit for the rest — a provider the host could not reach at startup, or an endpoint that moved.
 
+Whether that retry happens depends on what the failure proves. A call the server rejected (a session it no longer knows) or one whose transport was already gone never reached the tool, so it is re-sent — that includes a dead stdio child, whose next request the SDK reports as a plain `Error("Not connected")`. A connection that failed with the request *in flight* proves nothing about whether the tool started, so those are retried only when the operation declares `readOnlyHint`; a mutating operation gets an error saying the call may already have run, because a blind retry of a deploy is how one effect becomes two.
+
 ## Install
 
 ```bash

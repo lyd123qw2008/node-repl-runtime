@@ -82,27 +82,52 @@ export declare function collectProviderImages(content: unknown): ProviderImages;
  */
 export declare function mergeProviderImages(value: unknown, collected: ProviderImages): unknown;
 /**
+ * How a failed call relates to the session, and whether a retry can be proved free of side effects.
+ *
+ * `never-ran` is the safe case: the server rejected the request (a session it does not know) or the
+ * transport was gone before anything was sent, so the tool cannot have executed. `maybe-ran` is the
+ * honest case: the connection failed with the request in flight, which says nothing about whether
+ * the server started the tool — retrying one of those is a decision, not a repair, and `call()`
+ * makes it per operation (read-only retries, mutations do not).
+ */
+export type SessionLossKind = 'never-ran' | 'maybe-ran';
+/**
+ * Classify an error as a lost session, if that is what it is.
+ *
+ * Measured against SDK 2.0, because the obvious reading is wrong in two places.
+ *
+ * First, the streamable-HTTP transport reports *every* non-OK POST as the same `SdkHttpError` code
+ * (`CLIENT_HTTP_NOT_IMPLEMENTED`), so the code says nothing and the HTTP status is the only signal.
+ * The MCP spec has a server answer `404` for a session it does not know, and that is exactly what
+ * IDEA does after a restart — "Streamable HTTP session not found", with the call rejected rather
+ * than run.
+ *
+ * Second, the SDK's *request* path rejects a dead transport with a plain
+ * `new Error("Not connected")` — no `code` at all (dist/src-D_zzAWoS.mjs:6063,
+ * `_requestWithSchemaViaCodec`); only its notification path uses `SdkErrorCode.NotConnected`
+ * (…:6181). Matching that message is therefore the only way to see the shape, and it is the shape
+ * that matters most for stdio: when a child exits, the transport's own `close` handler clears the
+ * client's transport, so the *next* call takes exactly this path — a provider dead until the host
+ * restarts unless it is classified here.
+ */
+export declare function classifySessionLoss(error: unknown): SessionLossKind | undefined;
+/**
  * Whether an error means the session the client is holding is gone.
  *
- * Measured against SDK 2.0, because the obvious reading is wrong: the streamable-HTTP
- * transport reports *every* non-OK POST as the same `SdkHttpError` code
- * (`CLIENT_HTTP_NOT_IMPLEMENTED`), so the code says nothing and the HTTP status is the only
- * signal available. The MCP spec has a server answer `404` for a session it does not know,
- * and that is exactly what IDEA does after a restart — "Streamable HTTP session not found".
- *
- * Two other endings belong to the same class, and each is safe to retry because nothing was
- * delivered:
- *
- *   - the transport is gone (`NOT_CONNECTED`/`CONNECTION_CLOSED`: a closed SSE stream, a dead
- *     stdio child), which the SDK reports as its own codes;
- *   - the request never completed at all, which undici reports as `TypeError: fetch failed`
- *     with the real errno hidden on `cause`. This is what a call made while the IDE is still
- *     coming back up looks like, and recovering from it needs no more than the retry below.
- *
- * A tool that failed *on the server* is deliberately not in this set: it answers with a
- * result, not with a transport error, and retrying it would repeat a side effect.
+ * A tool that failed *on the server* is deliberately not in this set: it answers with a result, not
+ * with a transport error, and retrying it would repeat a side effect.
  */
 export declare function isSessionLoss(error: unknown): boolean;
+/**
+ * One line about a provider failure, bounded.
+ *
+ * The SDK builds its HTTP error message out of the whole response body — `Error POSTing to
+ * endpoint: ${body}` — with no cap (dist/index.mjs:5360,5382). Relayed verbatim, a proxy or a
+ * gateway answering with an HTML page would arrive as kilobytes: into the kernel's heap, and from
+ * there into the model's context. The cut is marked, because a reader has to know the message is
+ * not the whole story.
+ */
+export declare function describeProviderError(error: unknown): string;
 /**
  * The catalog as the kernel receives it.
  *

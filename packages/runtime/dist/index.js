@@ -8,10 +8,10 @@
  */
 import { fileURLToPath } from 'node:url';
 import { startBridge } from './bridge.js';
-import { connectMcpProvider, unattachedHealth } from './catalog.js';
+import { connectMcpProvider, describeProviderError, unattachedHealth } from './catalog.js';
 import { createKernelRoot, startKernel } from './kernel.js';
 export * from './types.js';
-export { applyInjection, catalogEntries, connectMcpProvider, isSessionLoss, projectOperation, providerHealth, selectTools, unattachedHealth, } from './catalog.js';
+export { applyInjection, catalogEntries, classifySessionLoss, connectMcpProvider, describeProviderError, isSessionLoss, projectOperation, providerHealth, selectTools, unattachedHealth, } from './catalog.js';
 export { abandonedCallsNotice, catalogRecoveryNotice } from './kernel.js';
 // Pure functions of one provider reply, so they are asserted directly instead of through a
 // CONNECTED server — the same reason `projectOperation` and `selectTools` are exported.
@@ -71,7 +71,7 @@ export async function createCapabilityRuntime(options) {
         const spec = url === undefined ? entry.spec : { ...entry.spec, url };
         const attempt = connect(spec)
             .catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
+            const message = describeProviderError(error);
             unattached.set(id, { spec: entry.spec, error: message });
             console.warn(`[node-repl-runtime] provider ${id} could not be attached: ${message}`);
             throw error;
@@ -101,7 +101,7 @@ export async function createCapabilityRuntime(options) {
             // Match the optional MCP-client startup policy: a provider that will not
             // connect contributes no capabilities, but it must not take the runtime
             // down. Other providers — including none — can still be used.
-            const message = error instanceof Error ? error.message : String(error);
+            const message = describeProviderError(error);
             unattached.set(spec.id, { spec, error: message });
             console.warn(`[node-repl-runtime] provider ${spec.id} failed to connect: ${message}`);
         }

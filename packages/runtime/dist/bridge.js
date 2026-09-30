@@ -23,7 +23,7 @@
  */
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
-import { catalogEntries, providerHealth } from './catalog.js';
+import { catalogEntries, describeProviderError, providerHealth } from './catalog.js';
 export async function startBridge(providers, options = {}) {
     const token = randomBytes(24).toString('hex');
     /** Provider calls currently running, keyed by the controller that can abort them. */
@@ -78,7 +78,7 @@ export async function startBridge(providers, options = {}) {
                     await options.attach(target, url);
                 }
                 catch (error) {
-                    return fail('MCP_ATTACH_FAILED', `provider ${target} is not attached and could not be connected: ${error instanceof Error ? error.message : String(error)}`, snapshot());
+                    return fail('MCP_ATTACH_FAILED', `provider ${target} is not attached and could not be connected: ${describeProviderError(error)}`, snapshot());
                 }
                 return { id, ok: true, value: snapshot() };
             }
@@ -91,7 +91,7 @@ export async function startBridge(providers, options = {}) {
                 await provider.session.reconnect(url === undefined ? {} : { url });
             }
             catch (error) {
-                return fail('MCP_RECONNECT_FAILED', `provider ${target} could not be re-opened: ${error instanceof Error ? error.message : String(error)}`, snapshot());
+                return fail('MCP_RECONNECT_FAILED', `provider ${target} could not be re-opened: ${describeProviderError(error)}`, snapshot());
             }
             return { id, ok: true, value: snapshot() };
         }
@@ -126,7 +126,7 @@ export async function startBridge(providers, options = {}) {
             }
             // A failed call may still have rebuilt the session before failing: the catalog is
             // reported either way, or the kernel would keep a tool list from a dead session.
-            return fail('MCP_CALL_FAILED', error instanceof Error ? error.message : String(error), rebuilt());
+            return fail('MCP_CALL_FAILED', describeProviderError(error), rebuilt());
         }
         finally {
             inFlight.delete(controller);
