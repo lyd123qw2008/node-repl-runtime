@@ -122,7 +122,17 @@ export async function createCapabilityRuntime(options) {
         failure: { id: entry.spec.id, error: entry.error },
         health: unattachedHealth(entry.spec, entry.error),
     }));
-    const bridge = await startBridge(providers, { unattached: unattachedProviders, attach });
+    // Startup stages need their own error boundary. A bare transport error here otherwise looks
+    // like a provider failure, even though the provider catalog may have connected successfully.
+    let bridge;
+    try {
+        bridge = await startBridge(providers, { unattached: unattachedProviders, attach });
+    }
+    catch (error) {
+        for (const provider of providers.values())
+            await provider.close().catch(() => { });
+        throw new Error(`capability bridge failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
     const root = options.kernelRoot ?? createKernelRoot();
     let kernel;
     try {
@@ -133,13 +143,14 @@ export async function createCapabilityRuntime(options) {
             failures: unattachedProviders().map(entry => entry.failure),
             entry: options.kernelEntry ?? resolveKernelEntry(),
             defaultTimeoutMs: options.cellTimeoutMs ?? 30_000,
+            ...options.kernelCommand === undefined ? {} : { command: options.kernelCommand },
         });
     }
     catch (error) {
-        await bridge.close();
+        await bridge.close().catch(() => { });
         for (const provider of providers.values())
             await provider.close().catch(() => { });
-        throw error;
+        throw new Error(`kernel startup failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
     let disposed = false;
     return {

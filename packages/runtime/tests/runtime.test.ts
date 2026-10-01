@@ -8,12 +8,13 @@
  * is the whole point of the design.
  */
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { createKernelRoot, startKernel } from '../src/kernel.js'
 import {
   abandonedCallsNotice,
   applyInjection,
@@ -630,12 +631,18 @@ describe('provider connection cleanup', () => {
     const pidFile = join(tmpdir(), `node-repl-fixture-${randomUUID()}.pid`)
     const fixture = fileURLToPath(new URL('./fixtures/fails-tools-list.mjs', import.meta.url))
 
-    await expect(connectMcpProvider({
-      id: 'fails',
-      transport: 'stdio',
-      command: process.execPath,
-      args: [fixture, pidFile],
-    })).rejects.toThrow(/discovery refused/)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(connectMcpProvider({
+        id: 'fails',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [fixture, pidFile],
+      })).rejects.toThrow(/discovery refused/)
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('transport closed'))
+    } finally {
+      warn.mockRestore()
+    }
 
     // Discovery failed *after* the client connected, so nothing else will ever close it.
     // Without the cleanup on the failing side this child is orphaned — one per startup,
@@ -644,6 +651,38 @@ describe('provider connection cleanup', () => {
     expect(Number.isSafeInteger(pid) && pid > 0).toBe(true)
     await expect.poll(() => isAlive(pid), { timeout: 10_000 }).toBe(false)
   }, 60_000)
+})
+
+describe('kernel startup cleanup', () => {
+  it('removes its scratch root when the kernel command cannot start', async () => {
+    const root = createKernelRoot()
+    try {
+      // A bad command is the deterministic form of the Electron-host failure: `connect()`
+      // rejects before `startKernel()` can return a session whose normal close would remove
+      // the root. The failed-start path must therefore own both the client and the root.
+      await expect(startKernel({
+        root,
+        bridge: {
+          host: '127.0.0.1',
+          port: 1,
+          token: 'test-token',
+          abandonInFlight() {},
+          inFlightCalls: () => [],
+          async close() {},
+        },
+        providers: new Map(),
+        failures: [],
+        entry: join(root, 'unused-kernel-entry.mjs'),
+        defaultTimeoutMs: 1,
+        command: join(root, 'missing-node-executable'),
+      })).rejects.toThrow()
+      expect(existsSync(root)).toBe(false)
+    } finally {
+      // Keep a failing regression test from leaving a temp directory behind on the developer's
+      // machine; the assertion above is what proves production cleanup succeeded.
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('kernel replacement', () => {

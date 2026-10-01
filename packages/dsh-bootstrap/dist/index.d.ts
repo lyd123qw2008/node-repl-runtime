@@ -18,7 +18,7 @@
  * the optional DSH MCP-client startup policy; failed providers simply contribute no tools.
  */
 import type { Context } from '@deepseek-ai/cordis';
-import { type McpProviderSpec } from '@lyd123qw2008/node-repl-runtime';
+import { type CapabilityRuntime, type McpProviderSpec, type RuntimeOptions } from '@lyd123qw2008/node-repl-runtime';
 export declare const name = "node-repl-runtime-bootstrap";
 /** Needs the tool runtime only to noop until the face registers; the face owns tools. */
 export declare const inject: readonly [];
@@ -26,6 +26,17 @@ export interface NodeReplBootstrapConfig {
     readonly providers?: readonly McpProviderSpec[];
     /** Default per-cell budget. */
     readonly cellTimeoutMs?: number;
+    /**
+     * Node-mode executable for the kernel child.
+     *
+     * Required in practice for the Desktop host, whose `process.execPath` is `electron.exe`
+     * while the MCP stdio transport strips `ELECTRON_RUN_AS_NODE` — so the kernel child would
+     * start as a GUI and close its stdio almost immediately. Left unset, the runtime applies
+     * `process.execPath`; Electron hosts must set this to a Node-mode executable.
+     */
+    readonly kernelCommand?: string;
+    /** Override runtime construction (tests). Mirrors the runtime's own `connector` seam. */
+    readonly runtimeFactory?: (options: RuntimeOptions) => Promise<CapabilityRuntime>;
 }
 /** Read provider specs from config or the environment. Exported for tests. */
 export declare function resolveProviders(config: NodeReplBootstrapConfig, env?: Readonly<Record<string, string | undefined>>): readonly McpProviderSpec[];
