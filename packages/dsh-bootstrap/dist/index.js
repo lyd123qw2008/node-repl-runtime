@@ -38,12 +38,49 @@ export function resolveProviders(config, env = process.env) {
     }
     return [];
 }
+/**
+ * A runtime that attached nothing.
+ *
+ * Only reachable when `createCapabilityRuntime` itself throws, which the per-provider
+ * catch inside it is written to prevent. It exists because the alternative is worse:
+ * see {@link apply}.
+ */
+function createEmptyRuntime(failures) {
+    const report = failures.map(failure => `${failure.id}: ${failure.error}`).join('; ');
+    const dead = async () => {
+        throw new Error(`node-repl runtime unavailable${report === '' ? '' : ` (${report})`}`);
+    };
+    return {
+        js: dead,
+        jsReset: dead,
+        catalog: () => [],
+        failures: () => [...failures],
+        dispose: async () => { },
+    };
+}
 export const apply = async (ctx, config = {}) => {
     const providers = resolveProviders(config);
-    const runtime = await createCapabilityRuntime({
-        providers,
-        ...config.cellTimeoutMs === undefined ? {} : { cellTimeoutMs: config.cellTimeoutMs },
-    });
+    // Build first, provide second, and never let a failure skip the provide.
+    //
+    // The adapter face injects `nodeReplRuntime`, so a bootstrap that ends without
+    // providing it leaves the face pending forever: `js` and `js_reset` are then absent
+    // from the tool list with no error anywhere, which is exactly the silent-absence bug
+    // this whole package exists to avoid. Providing a runtime that cannot run a cell is
+    // honest and diagnosable; providing nothing is invisible.
+    let runtime;
+    try {
+        const build = config.runtimeFactory ?? createCapabilityRuntime;
+        runtime = await build({
+            providers,
+            ...config.cellTimeoutMs === undefined ? {} : { cellTimeoutMs: config.cellTimeoutMs },
+            ...config.kernelCommand === undefined ? {} : { kernelCommand: config.kernelCommand },
+        });
+    }
+    catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        console.warn(`[node-repl-runtime] runtime setup failed; providing a non-functional runtime: ${reason}`);
+        runtime = createEmptyRuntime([{ id: 'runtime', error: reason }]);
+    }
     ctx.provide('nodeReplRuntime', runtime);
     ctx.effect(() => () => {
         void runtime.dispose();
@@ -54,8 +91,10 @@ export const apply = async (ctx, config = {}) => {
     const disabled = providers
         .filter(provider => provider.disabled === true)
         .map(provider => provider.id);
+    const failed = runtime.failures().map(failure => `${failure.id}=${failure.error}`).join(' ');
     console.log(`[node-repl-runtime] mounted ${report}`
         + (disabled.length > 0 ? ` | disabled: ${disabled.join(',')}` : '')
+        + (failed === '' ? '' : ` | failed: ${failed}`)
         + (providers.some(provider => Object.keys(provider.inject ?? {}).length > 0)
             ? ` | host-owned args injected: ${providers.flatMap(provider => Object.keys(provider.inject ?? {})).join(',')}`
             : ''));

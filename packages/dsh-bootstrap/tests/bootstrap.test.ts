@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { resolveProviders } from '../src/index.js'
+import { resolveProviders, apply } from '../src/index.js'
 
 const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url))
 
@@ -66,5 +66,73 @@ describe('provider configuration resolution', () => {
   it('preserves disabled provider fields from explicit configuration', () => {
     const disabled = { ...idea, disabled: true }
     expect(resolveProviders({ providers: [disabled] }, {})).toEqual([disabled])
+  })
+})
+
+describe('service provisioning', () => {
+  /** Minimal context: records the provided service and captures the dispose effect. */
+  function recordingContext() {
+    const provided = new Map<string, unknown>()
+    const effects: (() => void)[] = []
+    const ctx = {
+      provide(name: string, value: unknown) { provided.set(name, value) },
+      effect(factory: () => () => void) {
+        effects.push(factory())
+        return () => {}
+      },
+    }
+    return { ctx, provided, effects }
+  }
+
+  it('provides the service after a successful build and forwards the kernel command', async () => {
+    const { ctx, provided, effects } = recordingContext()
+    let receivedOptions: unknown
+    await apply(ctx as never, {
+      providers: [],
+      kernelCommand: 'node',
+      runtimeFactory: async options => {
+        receivedOptions = options
+        return {
+          js: async () => ({ status: 'ok', output: '', blocks: [], durationMs: 0 }),
+          jsReset: async () => {},
+          catalog: () => [],
+          failures: () => [],
+          dispose: async () => {},
+        }
+      },
+    })
+    expect(receivedOptions).toMatchObject({ providers: [], kernelCommand: 'node' })
+    expect(provided.get('nodeReplRuntime')).toBeDefined()
+    // The dispose effect is the only thing that closes kernels and provider sessions,
+    // so a provided runtime without one leaks a kernel per boot.
+    expect(effects).toHaveLength(1)
+  })
+
+  it('still provides the service when runtime construction throws', async () => {
+    // The reason this matters is the whole point of the package: the adapter face
+    // injects `nodeReplRuntime`, so a bootstrap that ends without providing it leaves
+    // the face pending forever. `js` and `js_reset` are then missing from the tool list
+    // with no error reported anywhere — the silent absence this runtime exists to avoid.
+    //
+    // It is reachable in practice: DSH's fail-loud handler charges an escaped rejection
+    // from the mounting fiber to this plugin, so an `apply()` that throws must not also
+    // be the reason the face never appears. Providing a runtime that cannot run a cell
+    // is honest and diagnosable; providing nothing is invisible.
+    const { ctx, provided } = recordingContext()
+    await apply(ctx as never, {
+      providers: [],
+      runtimeFactory: async () => { throw new Error('connection closed') },
+    })
+
+    const runtime = provided.get('nodeReplRuntime') as {
+      js: () => Promise<unknown>
+      catalog: () => unknown[]
+      failures: () => { id: string; error: string }[]
+    }
+    expect(runtime).toBeDefined()
+    expect(runtime.catalog()).toEqual([])
+    expect(runtime.failures()).toEqual([{ id: 'runtime', error: 'connection closed' }])
+    // Failure must be loud at the point of use, not a second silent absence.
+    await expect(runtime.js()).rejects.toThrow(/node-repl runtime unavailable.*connection closed/)
   })
 })

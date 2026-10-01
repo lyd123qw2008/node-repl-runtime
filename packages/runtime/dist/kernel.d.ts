@@ -60,6 +60,8 @@ export declare function startKernel(options: {
     failures: readonly ProviderFailure[];
     entry: string;
     defaultTimeoutMs: number;
+    /** Node-mode executable for the kernel child. Defaults to {@link resolveKernelCommand}. */
+    command?: string;
 }): Promise<KernelSession>;
 export {};
 //# sourceMappingURL=kernel.d.ts.map

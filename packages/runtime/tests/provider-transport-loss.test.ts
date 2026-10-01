@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { classifySessionLoss, connectMcpProvider, createCapabilityRuntime, describeProviderError } from '../src/index.js'
 import { startIdeaLikeServer } from './support/idea-like-server.js'
 
@@ -78,6 +78,32 @@ describe('a connection that dies under a call', () => {
       expect(Number(readFileSync(pidFile, 'utf8'))).toBe(second.pid)
     } finally {
       await connection.close()
+    }
+  }, 60_000)
+
+  it('does not report a transport failure when reconnecting or closing deliberately', async () => {
+    const pidFile = join(tmpdir(), `nr-echo-stdio-${randomUUID()}.pid`)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let connection: Awaited<ReturnType<typeof connectMcpProvider>> | undefined
+    try {
+      connection = await connectMcpProvider({
+        id: 'echo',
+        label: 'Echo',
+        transport: 'stdio',
+        command: process.execPath,
+        args: [STDIO_FIXTURE, pidFile],
+      })
+      expect(connection.session).toBeDefined()
+      // Both the operator-initiated reconnect and normal teardown close a live child. The
+      // lifecycle guard must mark them before the SDK emits `onclose`, or they masquerade as
+      // a peer failure in DSH's logs.
+      await connection.session!.reconnect()
+      await connection.close()
+      await new Promise(resolve => setTimeout(resolve, 50))
+      expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('provider echo transport error after setup'))
+    } finally {
+      if (connection !== undefined) await connection.close().catch(() => {})
+      warn.mockRestore()
     }
   }, 60_000)
 

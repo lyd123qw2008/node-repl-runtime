@@ -32,6 +32,31 @@ import type { JsCellBlock, JsCellResult, JsOptions, InFlightCall, ProviderConnec
 const BRIDGE_ASSET_DIR = fileURLToPath(new URL('../assets/nr-cap/', import.meta.url))
 
 /**
+ * The executable that runs the kernel child.
+ *
+ * `process.execPath` is right under plain Node and wrong under Electron. A DSH Desktop host
+ * runs in `electron.exe`, and the MCP stdio transport starts children with a small safe
+ * environment that deliberately does NOT include `ELECTRON_RUN_AS_NODE` — that is the SDK's
+ * whitelist, not something this package can patch. Without the flag Electron starts as a GUI
+ * application instead of running the script, so the transport closes almost immediately.
+ *
+ * There is no way to guess a better default here. Electron ships no standalone node binary
+ * (measured: its `dist` holds `electron.exe` alone), and `require('electron')` resolves to
+ * that same `electron.exe` — running it as the kernel command needs the very flag the
+ * transport strips. So an Electron host must pass `kernelCommand` explicitly, and this
+ * fallback is a deliberate, documented last resort rather than a working default.
+ *
+ * The failure is worth recognizing, because everything about it misleads. Measured under the
+ * Desktop host: the kernel child gets far enough to create its root and write
+ * `nr-cap/config.json`, so discovery looks healthy, and only the install cell dies — as
+ * `kernel startup failed: Connection closed`, which names neither the spawn nor Electron.
+ * @returns Command for the kernel child, as a path or a PATH-resolvable name.
+ */
+function resolveKernelCommand(): string {
+  return process.execPath
+}
+
+/**
  * Appended to a cell that lost its kernel, so the model does not call `js_reset` to recover
  * something the runtime has already put back.
  */
@@ -174,28 +199,47 @@ export async function startKernel(options: {
   failures: readonly ProviderFailure[]
   entry: string
   defaultTimeoutMs: number
+  /** Node-mode executable for the kernel child. Defaults to {@link resolveKernelCommand}. */
+  command?: string
 }): Promise<KernelSession> {
-  // The kernel reads this snapshot at import time, so it must exist before start.
-  writeFileSync(join(options.root, 'node_modules', 'nr-cap', 'config.json'), `${JSON.stringify({
-    host: options.bridge.host,
-    port: options.bridge.port,
-    token: options.bridge.token,
-    // One shape, built in one place: the same `providers` array a later `cap.refresh()`
-    // receives, so a rebuilt session refreshes the kernel's namespaces exactly the way the
-    // snapshot created them.
-    providers: catalogEntries(options.providers.values()),
-    // Not capabilities — nothing can be called on them — but discovery that lists only
-    // presences cannot answer "where is cua?" at all.
-    failures: options.failures,
-  }, null, 2)}\n`)
-
   const client = new Client({ name: 'node-repl-runtime', version: '0.0.0' }, { versionNegotiation: { mode: 'auto' } })
-  await client.connect(new StdioClientTransport({
-    command: process.execPath,
-    args: [options.entry],
-    cwd: options.root,
-    env: kernelNetworkEnvironment(),
-  }))
+  // `startKernel()` owns the scratch root from the point it writes the snapshot. A failed
+  // connect (notably Electron accidentally launched as the kernel command) used to happen
+  // before a KernelSession existed, so its normal `close()` cleanup was unreachable.
+  const cleanupFailedStart = async (): Promise<void> => {
+    await client.close().catch(() => {})
+    try {
+      rmSync(options.root, { recursive: true, force: true })
+    } catch {
+      // Preserve the startup failure; cleanup is best effort just as session disposal is.
+    }
+  }
+
+  try {
+    // The kernel reads this snapshot at import time, so it must exist before start.
+    writeFileSync(join(options.root, 'node_modules', 'nr-cap', 'config.json'), `${JSON.stringify({
+      host: options.bridge.host,
+      port: options.bridge.port,
+      token: options.bridge.token,
+      // One shape, built in one place: the same `providers` array a later `cap.refresh()`
+      // receives, so a rebuilt session refreshes the kernel's namespaces exactly the way the
+      // snapshot created them.
+      providers: catalogEntries(options.providers.values()),
+      // Not capabilities — nothing can be called on them — but discovery that lists only
+      // presences cannot answer "where is cua?" at all.
+      failures: options.failures,
+    }, null, 2)}\n`)
+
+    await client.connect(new StdioClientTransport({
+      command: options.command ?? resolveKernelCommand(),
+      args: [options.entry],
+      cwd: options.root,
+      env: kernelNetworkEnvironment(),
+    }))
+  } catch (error) {
+    await cleanupFailedStart()
+    throw error
+  }
 
   /**
    * The kernel yields control after `yield_time_ms` — 10 s unless asked otherwise —

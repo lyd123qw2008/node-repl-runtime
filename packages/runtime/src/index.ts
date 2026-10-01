@@ -8,7 +8,7 @@
  */
 
 import { fileURLToPath } from 'node:url'
-import { startBridge } from './bridge.js'
+import { startBridge, type Bridge } from './bridge.js'
 import { connectMcpProvider, describeProviderError, unattachedHealth } from './catalog.js'
 import { createKernelRoot, startKernel } from './kernel.js'
 import type {
@@ -177,7 +177,15 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
       health: unattachedHealth(entry.spec, entry.error),
     }))
 
-  const bridge = await startBridge(providers, { unattached: unattachedProviders, attach })
+  // Startup stages need their own error boundary. A bare transport error here otherwise looks
+  // like a provider failure, even though the provider catalog may have connected successfully.
+  let bridge: Bridge
+  try {
+    bridge = await startBridge(providers, { unattached: unattachedProviders, attach })
+  } catch (error) {
+    for (const provider of providers.values()) await provider.close().catch(() => {})
+    throw new Error(`capability bridge failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
+  }
   const root = options.kernelRoot ?? createKernelRoot()
 
   let kernel
@@ -189,11 +197,12 @@ export async function createCapabilityRuntime(options: RuntimeOptions): Promise<
       failures: unattachedProviders().map(entry => entry.failure),
       entry: options.kernelEntry ?? resolveKernelEntry(),
       defaultTimeoutMs: options.cellTimeoutMs ?? 30_000,
+      ...options.kernelCommand === undefined ? {} : { command: options.kernelCommand },
     })
   } catch (error) {
-    await bridge.close()
+    await bridge.close().catch(() => {})
     for (const provider of providers.values()) await provider.close().catch(() => {})
-    throw error
+    throw new Error(`kernel startup failed: ${error instanceof Error ? error.message : String(error)}`, { cause: error })
   }
 
   let disposed = false

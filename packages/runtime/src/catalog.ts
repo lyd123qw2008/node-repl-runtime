@@ -326,6 +326,14 @@ export function unattachedHealth(spec: McpProviderSpec, error: string): Provider
   }
 }
 
+/** One connection's lifecycle hooks, shared by every client that a provider session opens. */
+interface ProviderClientLifecycle {
+  /** Close a client deliberately, so its transport callbacks do not report a false failure. */
+  close(client: Client): Promise<void>
+  /** Report an unexpected transport failure after a client is fully established. */
+  report(client: Client, error: unknown): void
+}
+
 /**
  * Connect one client, and reap it if it cannot be used.
  *
@@ -333,11 +341,19 @@ export function unattachedHealth(spec: McpProviderSpec, error: string): Provider
  * nothing holding a reference to close it — and for stdio that is an orphaned child process per
  * attempt. The caller only sees the throw, so the cleanup has to happen on this side of it.
  */
-async function openClient(spec: McpProviderSpec, url: string | undefined): Promise<Client> {
+async function openClient(
+  spec: McpProviderSpec,
+  url: string | undefined,
+  lifecycle: ProviderClientLifecycle,
+): Promise<Client> {
   const client = new Client(
     { name: 'node-repl-runtime', version: '0.0.0' },
     { versionNegotiation: { mode: 'auto' } },
   )
+  // The SDK can report a peer's late exit after the call that used the client has settled.
+  // Keep that failure inside this provider rather than letting it escape the host event loop.
+  client.onerror = error => { lifecycle.report(client, error) }
+  client.onclose = () => { lifecycle.report(client, new Error('transport closed')) }
   /** Reads out the child's stderr tail. Empty for HTTP, and until something is written. */
   let stderrTail: () => string = () => ''
   try {
@@ -364,7 +380,7 @@ async function openClient(spec: McpProviderSpec, url: string | undefined): Promi
     }
     return client
   } catch (error) {
-    await client.close().catch(() => {})
+    await lifecycle.close(client)
     const tail = stderrTail()
     // The SDK's own message for a child that exited is about the connection; the child's last words
     // are the diagnosis. Both, with the tail last so it reads as the epilogue.
@@ -437,9 +453,31 @@ export async function connectMcpProvider(spec: McpProviderSpec): Promise<Provide
   /** Clients a runtime-decided reconnect set aside; closed as soon as their last call settles. */
   const retiring = new Set<Client>()
 
+  // The SDK can notify `onerror` / `onclose` after a caller has stopped awaiting a client.
+  // Keep those failures inside this provider: an escaped rejection makes the DSH bootstrap fiber
+  // fail and silently prevents the injected `js` / `js_reset` tools from registering. A client is
+  // reportable only after discovery completed; setup failures already have a direct caller that
+  // records them in `failures`. Intentional close paths are suppressed so normal disposal and
+  // reconnect cleanup do not look like transport failures.
+  const activeClients = new WeakSet<Client>()
+  const intentionalCloses = new WeakSet<Client>()
+  const reportedFailures = new WeakSet<Client>()
+  const lifecycle: ProviderClientLifecycle = {
+    async close(client) {
+      intentionalCloses.add(client)
+      await client.close().catch(() => {})
+    },
+    report(client, error) {
+      if (!activeClients.has(client) || intentionalCloses.has(client) || reportedFailures.has(client)) return
+      reportedFailures.add(client)
+      const message = error instanceof Error ? error.message : String(error)
+      console.warn(`[node-repl-runtime] provider ${spec.id} transport error after setup: ${message}`)
+    },
+  }
+
   const retire = (client: Client): void => {
     if ((inFlightByClient.get(client) ?? 0) === 0) {
-      void client.close().catch(() => {})
+      void lifecycle.close(client)
       return
     }
     retiring.add(client)
@@ -449,16 +487,18 @@ export async function connectMcpProvider(spec: McpProviderSpec): Promise<Provide
     const remaining = (inFlightByClient.get(client) ?? 1) - 1
     inFlightByClient.set(client, remaining)
     // The detached client's last caller has its answer: nothing will read anything else from it.
-    if (remaining <= 0 && retiring.delete(client)) void client.close().catch(() => {})
+    if (remaining <= 0 && retiring.delete(client)) void lifecycle.close(client)
   }
 
   /** Connect and discover as one unit: a client without a catalog is not a session yet. */
   const establish = async (url: string | undefined): Promise<{ client: Client; operations: readonly ProjectedOperation[] }> => {
-    const client = await openClient(spec, url)
+    const client = await openClient(spec, url, lifecycle)
     try {
-      return { client, operations: await discoverOperations(client, spec) }
+      const operations = await discoverOperations(client, spec)
+      activeClients.add(client)
+      return { client, operations }
     } catch (error) {
-      await client.close().catch(() => {})
+      await lifecycle.close(client)
       throw error
     }
   }
@@ -495,7 +535,7 @@ export async function connectMcpProvider(spec: McpProviderSpec): Promise<Provide
     const previous = live.client
     live.client = undefined
     if (previous !== undefined) {
-      if (options?.closePrevious === true) await previous.close().catch(() => {})
+      if (options?.closePrevious === true) await lifecycle.close(previous)
       else retire(previous)
     }
     try {
@@ -503,7 +543,7 @@ export async function connectMcpProvider(spec: McpProviderSpec): Promise<Provide
       // Disposal can land mid-reconnect: this process is going away, so the session that was
       // just opened must be reaped here or it outlives the runtime — for stdio, as a child.
       if (live.closed) {
-        await opened.client.close().catch(() => {})
+        await lifecycle.close(opened.client)
         throw new Error(`provider ${spec.id} is closed`)
       }
       // Published together, so a caller never observes a new client whose catalog belongs to
@@ -680,11 +720,11 @@ export async function connectMcpProvider(spec: McpProviderSpec): Promise<Provide
     call,
     async close() {
       live.closed = true
-      await live.client?.close().catch(() => {})
+      if (live.client !== undefined) await lifecycle.close(live.client)
       live.client = undefined
       // A detached client outlives its replacement by design; shutting down still reaps it, or a
       // stdio child would survive the runtime that started it.
-      for (const client of retiring) await client.close().catch(() => {})
+      for (const client of retiring) await lifecycle.close(client)
       retiring.clear()
     },
   }

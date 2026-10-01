@@ -268,5 +268,15 @@ export interface RuntimeOptions {
     readonly connector?: ProviderConnector;
     /** Override the kernel entry point (tests). */
     readonly kernelEntry?: string;
+    /**
+     * Node-mode executable for the kernel child.
+     *
+     * Set this when the runtime is mounted from a host whose `process.execPath` is not Node.
+     * Electron is the case that exists: the MCP stdio transport starts children with a safe
+     * environment that omits `ELECTRON_RUN_AS_NODE`, so `electron.exe` would open a GUI
+     * instead of running the kernel. Defaults to `process.execPath`; Electron hosts must
+     * explicitly pass a Node-mode executable.
+     */
+    readonly kernelCommand?: string;
 }
 //# sourceMappingURL=types.d.ts.map
