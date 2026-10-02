@@ -72,16 +72,16 @@ compiles the own-source probe on `windows-2022`. The source and workflow were pu
 only to the explicit public branch `ci/windows-acl-native-audit`; no release,
 published package, production runtime source, DSH checkout, or profile was changed.
 
-The final reviewed run is [`36997631166`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36997631166):
+The final reviewed run is [`36998074826`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36998074826), dispatched against the same published branch and commit that contains this verifier:
 
-- source commit: `93863b13532c4165ed9ff4d2edb71860bd0a3119`;
+- source commit: `94b34a07e637313abecb926351f872d7131c5a60`;
 - runner: Windows Server 2022 / `windows-2022`, x64, image `20260927.320.1`;
 - compiler: MSVC `19.44.35229` / Windows SDK `10.0.26100.0`;
 - executable: `177,664` bytes, SHA-256
-  `74e9aa89d8b5729ade26f04cb5f466bee26861360c5fe2c096fcb31aa6c5c0df`;
+  `4520186c6e25f756fd0327a28a75cbbe531efd88f6b938076262a2d861ca38a6`;
 - GitHub artifact archive SHA-256:
-  `0fcc10e492726c5e39ec68940c342aa6c14c36d36b21f05819524ec92e608231`;
-- artifact ID `11221962842`, retained only through 2026-10-09;
+  `0e91105e41ba55177d2fd3e341027bb3346251727e907037dbe5bdb04ea80257`;
+- artifact ID `11221703622`, retained only through 2026-10-09;
 - CI and local re-execution both passed `abi`, `handle-sentinel`, and
   `job-settlement`.
 
@@ -90,7 +90,7 @@ executable SHA-256**, exactly the three expected artifact files, a <=2 MiB
 executable, manifest/compiler/SDK/runner checks, both embedded SHA-256 checks, and
 all three local modes before writing `NATIVE_AUDIT_PASS`. The final raw local
 evidence is
-`C:\Users\32664\AppData\Local\node-repl-runtime-phase0\20261002T105200Z-e513b14fabcb424a9fb38cf85e17f3cc\evidence\10-ci-native-audit-artifact\evidence.json`.
+`C:\Users\32664\AppData\Local\node-repl-runtime-phase0\20261002T105600Z-bbabcaaa0ade44f1aec69cfce650872e\evidence\10-ci-native-audit-artifact\evidence.json`.
 
 This removes the **local compiler installation** gap only. It provides a small,
 independent Windows-header/handle-list/Job-accounting oracle, not an owned sandbox

@@ -121,9 +121,9 @@ unexpected runner/compiler/SDK provenance, or a failing audit mode. It emits
 `UNSUPPORTED` and exit `2` rather than executing an untrusted artifact.
 
 ```powershell
-$run = 36997631166 # replace only with a reviewed successful run
-$commit = '93863b13532c4165ed9ff4d2edb71860bd0a3119' # exact full source commit for that run
-$sha256 = '74e9aa89d8b5729ade26f04cb5f466bee26861360c5fe2c096fcb31aa6c5c0df' # independently recorded EXE hash
+$run = 36998074826 # replace only with a reviewed successful run
+$commit = '94b34a07e637313abecb926351f872d7131c5a60' # exact full source commit for that run
+$sha256 = '4520186c6e25f756fd0327a28a75cbbe531efd88f6b938076262a2d861ca38a6' # independently recorded EXE hash
 $name = "windows-acl-native-audit-$commit"
 $base = Join-Path $env:LOCALAPPDATA "node-repl-runtime-phase0\$commit"
 $artifact = Join-Path $base 'github-artifact'
