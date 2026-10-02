@@ -811,10 +811,10 @@ int wmain(int argc, wchar_t** argv) {
   }
   currentToken = ScopedHandle(rawCurrentToken);
   {
-    PSID_AND_ATTRIBUTES restrictedAttributes = new SID_AND_ATTRIBUTES{restrictedSid.get(), 0};
+    SID_AND_ATTRIBUTES disabledAdministrator{administratorSid.get(), 0};
+    SID_AND_ATTRIBUTES restrictedAttribute{restrictedSid.get(), 0};
     HANDLE rawRestrictedToken = nullptr;
-    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 1, restrictedAttributes, &rawRestrictedToken);
-    delete restrictedAttributes;
+    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 1, &disabledAdministrator, 0, nullptr, 1, &restrictedAttribute, &rawRestrictedToken);
     if (created == FALSE) {
       result.error = GetLastError();
       result.phase = "create-restricted-token";
@@ -939,6 +939,15 @@ int wmain(int argc, wchar_t** argv) {
     }
     ScopedHandle targetProcess(processInformation.hProcess);
     ScopedHandle targetThread(processInformation.hThread);
+    // Close the parent's copies of every child-side handle immediately after
+    // CreateProcessAsUserW. Otherwise the stdout/stderr drainers would retain
+    // an open write end and could never observe EOF after the target exits.
+    stdinChild.reset();
+    stdoutChild.reset();
+    stderrChild.reset();
+    fd3.child.reset();
+    fd7.child.reset();
+    for (auto& carrier : carrierChild) carrier.reset();
     result.tokenRestricted = false;
     result.tokenLow = false;
     if (!queryTokenFacts(targetProcess.get(), restrictedSid.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
