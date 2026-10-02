@@ -842,7 +842,10 @@ int wmain(int argc, wchar_t** argv) {
     }
     label.Label.Sid = lowSid.get();
     label.Label.Attributes = SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
-    if (SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
+    // Diagnostic toggle: isolate loader behavior without the Low label. The
+    // final Tier 20 gate remains false until the label is restored.
+    bool skipLowForDiagnostic = true;
+    if (!skipLowForDiagnostic && SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
       result.error = GetLastError();
       result.phase = "set-low-integrity";
       goto cleanup;
