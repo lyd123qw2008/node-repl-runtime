@@ -817,15 +817,8 @@ int wmain(int argc, wchar_t** argv) {
   }
   currentToken = ScopedHandle(rawCurrentToken);
   {
-    SID_AND_ATTRIBUTES restrictedAttributes[2] = {
-        {restrictedSid.get(), 0},
-        // Keep the normal World read/execute access pass available for system
-        // DLLs and the copied Node image; write access still requires the
-        // explicit Restricted Code ACE on the owned roots.
-        {worldSid.get(), 0},
-    };
     HANDLE rawRestrictedToken = nullptr;
-    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 2, restrictedAttributes, &rawRestrictedToken);
+    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 0, nullptr, &rawRestrictedToken);
     if (created == FALSE) {
       result.error = GetLastError();
       result.phase = "create-restricted-token";
