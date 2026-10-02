@@ -187,6 +187,7 @@ struct ProbeResult {
   bool lowLabelApplied = false;
   bool defaultDaclGrant = false;
   bool defaultDaclWorldGrant = false;
+  std::string defaultDaclAcesJson = "[]";
   bool explicitEnvironmentBlock = false;
   bool handleAllowlist = false;
   bool controlHandlePipe = false;
@@ -244,6 +245,52 @@ std::string narrow(const std::wstring& value) {
   std::string result(static_cast<size_t>(bytes), '\0');
   WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), result.data(), bytes, nullptr, nullptr);
   return result;
+}
+
+const char* sidClass(
+    PSID sid,
+    const std::array<PSID, 4>& expectedRestrictedSids,
+    DWORD expectedRestrictedCount,
+    PSID expectedWorldSid) {
+  if (sid == nullptr) return "null";
+  if (EqualSid(sid, expectedWorldSid) != FALSE) return "world";
+  for (DWORD index = 0; index < expectedRestrictedCount; ++index) {
+    if (EqualSid(sid, expectedRestrictedSids[index]) == FALSE) continue;
+    switch (index) {
+      case 0: return "logon-session";
+      case 1: return "world";
+      case 2: return "workspace-capability";
+      case 3: return "temp-capability";
+      default: return "restricted-sid";
+    }
+  }
+  if (IsWellKnownSid(sid, WinLocalSystemSid) != FALSE) return "local-system";
+  return "ambient-other";
+}
+
+DWORD sidOffsetForAce(BYTE aceType, PACE_HEADER header, DWORD* error) {
+  switch (aceType) {
+    case ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+    case ACCESS_DENIED_OBJECT_ACE_TYPE:
+    case SYSTEM_AUDIT_OBJECT_ACE_TYPE:
+    case SYSTEM_ALARM_OBJECT_ACE_TYPE:
+    case ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE:
+    case ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE:
+    case SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE:
+    case SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE: {
+      if (header->AceSize < 12) {
+        *error = ERROR_INVALID_ACL;
+        return 0;
+      }
+      auto* object = reinterpret_cast<PACCESS_ALLOWED_OBJECT_ACE>(header);
+      DWORD offset = 12;
+      if ((object->Flags & ACE_OBJECT_TYPE_PRESENT) != 0) offset += sizeof(GUID);
+      if ((object->Flags & ACE_INHERITED_OBJECT_TYPE_PRESENT) != 0) offset += sizeof(GUID);
+      return offset;
+    }
+    default:
+      return 8;
+  }
 }
 
 bool equalInsensitive(const std::wstring& left, const std::wstring& right) {
@@ -841,7 +888,7 @@ struct DrainState {
   }
 };
 
-bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrictedSids, DWORD expectedRestrictedCount, PSID expectedDefaultDaclSid, PSID expectedWorldSid, bool* restricted, bool* restrictedSidSetExact, bool* defaultDaclGrant, bool* defaultDaclWorldGrant, bool* low, DWORD* error) {
+bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrictedSids, DWORD expectedRestrictedCount, PSID expectedDefaultDaclSid, PSID expectedWorldSid, bool* restricted, bool* restrictedSidSetExact, bool* defaultDaclGrant, bool* defaultDaclWorldGrant, std::string* defaultDaclAcesJson, bool* low, DWORD* error) {
   ScopedHandle token;
   HANDLE raw = nullptr;
   if (OpenProcessToken(process, TOKEN_QUERY, &raw) == FALSE) {
@@ -895,7 +942,10 @@ bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrict
   auto* tokenDefaultDacl = reinterpret_cast<PTOKEN_DEFAULT_DACL>(defaultDaclInfo.data());
   *defaultDaclGrant = false;
   *defaultDaclWorldGrant = false;
+  *defaultDaclAcesJson = "[]";
   if (tokenDefaultDacl->DefaultDacl != nullptr && IsValidAcl(tokenDefaultDacl->DefaultDacl) != FALSE) {
+    std::ostringstream aceJson;
+    aceJson << '[';
     for (DWORD index = 0; index < tokenDefaultDacl->DefaultDacl->AceCount; ++index) {
       LPVOID rawAce = nullptr;
       if (GetAce(tokenDefaultDacl->DefaultDacl, index, &rawAce) == FALSE) {
@@ -903,13 +953,48 @@ bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrict
         return false;
       }
       auto* header = reinterpret_cast<PACE_HEADER>(rawAce);
-      if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
-      auto* allow = reinterpret_cast<PACCESS_ALLOWED_ACE>(rawAce);
-      PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
-      if ((allow->Mask & FILE_ALL_ACCESS) != FILE_ALL_ACCESS) continue;
-      if (EqualSid(aceSid, expectedDefaultDaclSid) != FALSE) *defaultDaclGrant = true;
-      if (EqualSid(aceSid, expectedWorldSid) != FALSE) *defaultDaclWorldGrant = true;
+      const DWORD aceSize = header->AceSize;
+      if (aceSize < 8) {
+        *error = ERROR_INVALID_ACL;
+        return false;
+      }
+      ACCESS_MASK mask = 0;
+      std::memcpy(&mask, static_cast<const BYTE*>(rawAce) + sizeof(ACE_HEADER), sizeof(mask));
+      *error = ERROR_SUCCESS;
+      const DWORD sidOffset = sidOffsetForAce(header->AceType, header, error);
+      if (*error != ERROR_SUCCESS) return false;
+      const bool sidPresent = sidOffset + sizeof(DWORD) * 2 <= aceSize;
+      PSID aceSid = nullptr;
+      if (sidPresent) {
+        aceSid = const_cast<BYTE*>(static_cast<const BYTE*>(rawAce) + sidOffset);
+        if (IsValidSid(aceSid) == FALSE || GetLengthSid(aceSid) > aceSize - sidOffset) {
+          *error = ERROR_INVALID_SID;
+          return false;
+        }
+        if (header->AceType == ACCESS_ALLOWED_ACE_TYPE && (mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS) {
+          if (EqualSid(aceSid, expectedDefaultDaclSid) != FALSE) *defaultDaclGrant = true;
+          if (EqualSid(aceSid, expectedWorldSid) != FALSE) *defaultDaclWorldGrant = true;
+        }
+      }
+      if (index != 0) aceJson << ',';
+      aceJson << "{\"index\":" << index
+              << ",\"type\":" << static_cast<unsigned int>(header->AceType)
+              << ",\"flags\":" << static_cast<unsigned int>(header->AceFlags)
+              << ",\"mask\":\"0x";
+      char maskText[9]{};
+      std::snprintf(maskText, sizeof(maskText), "%08lx", static_cast<unsigned long>(mask));
+      aceJson << maskText << "\",\"sidClass\":\""
+              << jsonEscape(sidClass(aceSid, expectedRestrictedSids, expectedRestrictedCount, expectedWorldSid)) << "\"";
+      aceJson << '}';
     }
+    aceJson << ']';
+    *defaultDaclAcesJson = aceJson.str();
+  } else if (tokenDefaultDacl->DefaultDacl == nullptr) {
+    *error = ERROR_INVALID_ACL;
+    return false;
+  } else {
+    *error = ERROR_INVALID_ACL;
+    return false;
   }
 
   DWORD size = 0;
@@ -1000,7 +1085,7 @@ int printResult(const Options& options, const ProbeResult& result) {
   const std::string status = result.pass ? "PASS" : "FAIL";
   std::printf(
       "{\"schemaVersion\":2,\"tool\":\"%s\",\"mode\":\"%s\",\"status\":\"%s\","
-      "\"tokenRestricted\":%s,\"restrictedSidSetExact\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"daclInspector\":%s,\"protectedDaclVerified\":%s,\"worldWriteDeleteDenied\":%s,\"workspaceGrantMaskVerified\":%s,\"tempGrantMaskVerified\":%s,\"unrelatedCapabilityAbsent\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,\"defaultDaclWorldGrant\":%s,"
+      "\"tokenRestricted\":%s,\"restrictedSidSetExact\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"daclInspector\":%s,\"protectedDaclVerified\":%s,\"worldWriteDeleteDenied\":%s,\"workspaceGrantMaskVerified\":%s,\"tempGrantMaskVerified\":%s,\"unrelatedCapabilityAbsent\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,\"defaultDaclWorldGrant\":%s,\"defaultDaclAces\":%s,"
       "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"controlHandlePipe\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
       "\"jobCreated\":%s,\"targetProcessCreated\":%s,\"targetProcessExited\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,\"targetExitSuccess\":%s,"
@@ -1021,6 +1106,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.lowLabelApplied).c_str(),
       jsonBool(result.defaultDaclGrant).c_str(),
       jsonBool(result.defaultDaclWorldGrant).c_str(),
+      result.defaultDaclAcesJson.c_str(),
       jsonBool(result.explicitEnvironmentBlock).c_str(),
       jsonBool(result.handleAllowlist).c_str(),
       jsonBool(result.controlHandlePipe).c_str(),
@@ -1405,7 +1491,7 @@ int wmain(int argc, wchar_t** argv) {
     result.tokenLow = false;
     std::array<PSID, 4> expectedRestrictedSids{logonSid.get(), worldSid.get(), workspaceCapabilitySid.get(), tempCapabilitySid.get()};
     const DWORD expectedRestrictedCount = options.mode == L"workspace-write" ? 4 : 2;
-    if (!queryTokenFacts(targetProcess.get(), expectedRestrictedSids, expectedRestrictedCount, defaultDaclCapability, worldSid.get(), &result.tokenRestricted, &result.restrictedSidSetExact, &result.defaultDaclGrant, &result.defaultDaclWorldGrant, &result.tokenLow, &error)) {
+    if (!queryTokenFacts(targetProcess.get(), expectedRestrictedSids, expectedRestrictedCount, defaultDaclCapability, worldSid.get(), &result.tokenRestricted, &result.restrictedSidSetExact, &result.defaultDaclGrant, &result.defaultDaclWorldGrant, &result.defaultDaclAcesJson, &result.tokenLow, &error)) {
       result.error = error;
       result.phase = "inspect-target-token";
       TerminateProcess(targetProcess.get(), 1);

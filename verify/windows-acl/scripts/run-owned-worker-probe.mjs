@@ -18,8 +18,8 @@ const nonClaims = [
   'This is a non-production owned-worker feasibility probe, not a runtime launcher.',
   'The probe establishes only the tested Windows ACL/token/Low/Job/fd/environment facts; it does not constrain network egress or ambient process visibility.',
   'Cell-created child processes remain subject to the owned Job but are not a general OS process-visibility policy.',
-  'Cell-owned child_process piped stdio may fail with EPERM on a Windows ACL restricted token; it is recorded as a known partial-boundary diagnostic, not claimed as supported.',
-  'Workspace-write TokenDefaultDacl includes the tested World FILE_ALL_ACCESS compatibility ACE; this broad default-object ACL is not a process/object visibility guarantee.',
+  'Cell-owned child_process piped stdio is the DSH-documented unsupported boundary for Windows ACL restricted tokens; it is recorded diagnostically and is not a Phase 0 blocker or a supported capability.',
+  'Workspace-write TokenDefaultDacl includes a probe-only World FILE_ALL_ACCESS compatibility ACE that differs from the pinned DSH source behavior; it is not a production design or accepted workaround.',
   'No result enables sandboxHost required or changes the production/default host.',
 ]
 
@@ -88,7 +88,13 @@ async function runMode(mode) {
         stdout: `${invocation.stdout ?? ''}`.slice(0, 8192),
       }
     }
-    const pass = invocation.status === 0 && native?.status === 'PASS'
+    const defaultDaclAces = Array.isArray(native?.defaultDaclAces) ? native.defaultDaclAces : null
+    const hasFullAccessAce = (sidClass) => defaultDaclAces?.some((ace) =>
+      ace?.type === 0 && ace?.mask === '0x001f01ff' && ace?.sidClass === sidClass) === true
+    const defaultDaclShapeVerified = mode === 'workspace-write'
+      ? hasFullAccessAce('temp-capability') && hasFullAccessAce('world')
+      : hasFullAccessAce('world')
+    const pass = invocation.status === 0 && native?.status === 'PASS' && defaultDaclShapeVerified
     return {
       schemaVersion: 2,
       generatedAt: new Date().toISOString(),
@@ -113,6 +119,8 @@ async function runMode(mode) {
       lowLabelApplied: native?.lowLabelApplied === true,
       defaultDaclGrant: native?.defaultDaclGrant === true,
       defaultDaclWorldGrant: native?.defaultDaclWorldGrant === true,
+      defaultDaclShapeVerified,
+      defaultDaclAces,
       osHandleAllowlistProven: native?.handleAllowlist === true,
       controlHandlePipe: native?.controlHandlePipe === true,
       releaseEligible: false,
