@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { statSync } from 'node:fs'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import { basename, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -16,6 +16,7 @@ const artifactDirectory = requestedEvidenceRoot === undefined
 const artifactPath = join(artifactDirectory, 'evidence.json')
 const expectedNames = Object.freeze(['node-repl-win32-audit.exe', 'manifest.json', 'SHA256SUMS.txt'])
 const expectedModes = Object.freeze(['abi', 'handle-sentinel', 'job-settlement'])
+const maxExecutableBytes = 2 * 1024 * 1024
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex')
@@ -83,14 +84,23 @@ try {
     }
   } else if (artifactInput === undefined) {
     outcome = artifactFailure('Set NODE_REPL_VERIFY_NATIVE_AUDIT_DIR to the extracted GitHub Actions artifact directory.')
+  } else if (expectedCommit === undefined) {
+    outcome = artifactFailure('Set NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT to the exact full source commit that produced the artifact.')
   } else {
     const inputDirectory = resolve(artifactInput)
     requireCondition(statSync(inputDirectory).isDirectory(), 'The artifact directory is not an existing directory.')
+    const rootEntries = await readdir(inputDirectory, { withFileTypes: true })
+    requireCondition(
+      rootEntries.length === expectedNames.length && rootEntries.every(entry => entry.isFile() && expectedNames.includes(entry.name)),
+      'The extracted artifact must contain exactly the three expected regular files and no nested entries.',
+    )
     const paths = Object.fromEntries(expectedNames.map(name => [name, join(inputDirectory, name)]))
     for (const [name, path] of Object.entries(paths)) {
       requireCondition(statSync(path).isFile(), `Artifact member is missing or is not a file: ${name}`)
       requireCondition(basename(path) === name, `Artifact member basename is unexpected: ${name}`)
     }
+    const executableStats = statSync(paths['node-repl-win32-audit.exe'])
+    requireCondition(executableStats.size > 0 && executableStats.size <= maxExecutableBytes, `Artifact executable must be nonempty and no larger than ${maxExecutableBytes} bytes.`)
 
     const [manifestText, checksumText, executable] = await Promise.all([
       readFile(paths['manifest.json'], 'utf8'),
@@ -107,10 +117,8 @@ try {
     requireCondition(typeof manifest.compiler?.version === 'string' && manifest.compiler.version.includes('Microsoft'), 'Artifact manifest does not identify the expected MSVC compiler.')
     requireCondition(/^\d+\.\d+\.\d+\.\d+$/u.test(manifest.compiler?.windowsSdkVersion ?? ''), 'Artifact manifest does not identify a numeric Windows SDK version.')
     requireCondition(Array.isArray(manifest.selfTestModes) && expectedModes.every(mode => manifest.selfTestModes.includes(mode)), 'Artifact manifest omits a required self-test mode.')
-    if (expectedCommit !== undefined) {
-      requireCondition(/^[a-f0-9]{40}$/u.test(expectedCommit), 'NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT must be a full lowercase SHA-1 commit id.')
-      requireCondition(manifest.sourceCommit === expectedCommit, 'Artifact source commit does not equal NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT.')
-    }
+    requireCondition(/^[a-f0-9]{40}$/u.test(expectedCommit), 'NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT must be a full SHA-1 commit id.')
+    requireCondition(manifest.sourceCommit === expectedCommit, 'Artifact source commit does not equal NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT.')
 
     const computedSha256 = sha256(executable)
     requireCondition(computedSha256 === manifest.sha256, 'Artifact executable SHA-256 does not match manifest.json.')
