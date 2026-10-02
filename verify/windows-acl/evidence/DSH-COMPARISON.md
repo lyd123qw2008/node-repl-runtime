@@ -3,10 +3,15 @@
 This comparison keeps the standalone verifier in `verify/`; it does not import DSH
 packages, alter the DSH checkout, or turn the probe into a second sandbox implementation.
 The external reference source is DSH revision
-`f9d6609d182969c9f57499ef552edb78835cc4e4`. The token snapshot runner requires that
-revision and verifies the specific ACL/token/runner/test files are clean, then records
-SHA-256 hashes for them. The caller's DSH worktree has unrelated dirty paths, so this is
-not described as a fully clean checkout.
+`f9d6609d182969c9f57499ef552edb78835cc4e4`. The initial two-mode local observation used
+the caller's DSH worktree: the selected ACL/token/runner/test files were clean, but
+unrelated paths including the lockfile were dirty, so that result alone did not prove a
+fully clean dependency install. In round 2, the workspace-write snapshot was repeated from
+a fresh detached clone with `pnpm@11.7.0` and `--frozen-lockfile`; the runner now checks
+and hashes root package/workspace/lock manifests as well as the ACL/token/runner/test
+files. That clean-clone workspace-write smoke reproduced the temp-only inheritable ACE
+under Node `v24.15.0`. The one-shot Windows CI matrix installs the same pinned DSH commit
+from its frozen lockfile before running A1 under Node `v22.19.0`.
 
 ## Actual DSH final-token observation
 

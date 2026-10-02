@@ -14,6 +14,8 @@ const parentSentinelVisible = Object.hasOwn(process.env, 'NODE_REPL_PHASE0_PAREN
 const dshControlMarkerVisible = Object.hasOwn(process.env, 'DSH_SUBPROCESS_CONTROL')
 const nodeOptionsVisible = Object.hasOwn(process.env, 'NODE_OPTIONS')
 const ambientUserProfileVisible = Object.hasOwn(process.env, 'USERPROFILE')
+const environmentPolicy = process.env.NODE_REPL_TIER20_ENVIRONMENT_POLICY ?? 'explicit'
+const expectFilteredEnvironment = environmentPolicy === 'explicit'
 
 delete process.env.NODE_REPL_KERNEL_CONTROL
 
@@ -99,6 +101,7 @@ function runFileAndEnvironmentChecks() {
   const expectedWritable = mode === 'workspace-write'
   if (mode !== 'read-only' && !expectedWritable) failures.push('invalid-mode')
   if (typeof workspace !== 'string' || typeof privateTemp !== 'string') failures.push('missing-path-environment')
+  if (environmentPolicy !== 'explicit' && environmentPolicy !== 'inherit') failures.push('invalid-environment-policy')
 
   let seed = null
   try {
@@ -145,10 +148,12 @@ function runFileAndEnvironmentChecks() {
   if (process.env.TEMP !== privateTemp) failures.push('TEMP-not-private-temp')
   if (markerBeforeConsume !== 'pipe') failures.push('control-marker-missing')
   if (Object.hasOwn(process.env, 'NODE_REPL_KERNEL_CONTROL')) failures.push('control-marker-not-consumed')
-  if (parentSentinelVisible) failures.push('parent-sentinel-leaked')
-  if (dshControlMarkerVisible) failures.push('dsh-control-marker-leaked')
-  if (nodeOptionsVisible) failures.push('node-options-leaked')
-  if (ambientUserProfileVisible) failures.push('user-profile-leaked')
+  if (expectFilteredEnvironment) {
+    if (parentSentinelVisible) failures.push('parent-sentinel-leaked')
+    if (dshControlMarkerVisible) failures.push('dsh-control-marker-leaked')
+    if (nodeOptionsVisible) failures.push('node-options-leaked')
+    if (ambientUserProfileVisible) failures.push('user-profile-leaked')
+  }
 
   return {
     ok: failures.length === 0,
@@ -164,6 +169,7 @@ function runFileAndEnvironmentChecks() {
     outsideSentinelReadable: outsideSentinelContent === 'tier20-external-sentinel\n',
     outsideDelete,
     environment: {
+      policy: environmentPolicy,
       markerBeforeConsume,
       markerVisibleAfterConsume: Object.hasOwn(process.env, 'NODE_REPL_KERNEL_CONTROL'),
       parentSentinelVisible,
