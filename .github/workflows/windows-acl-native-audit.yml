@@ -1,0 +1,110 @@
+name: Windows ACL native audit
+
+on:
+  push:
+    branches:
+      - ci/windows-acl-native-audit
+    paths:
+      - .github/workflows/windows-acl-native-audit.yml
+      - verify/windows-acl/native/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build and self-test x64 audit probe
+    runs-on: windows-2022
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the exact source revision
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+
+      - name: Build and self-test the narrow native probe
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+            throw "vswhere.exe was not found at $vswhere"
+          }
+
+          $vsRoot = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
+          if ([string]::IsNullOrWhiteSpace($vsRoot)) {
+            throw 'No x64 MSVC build-tools installation was found on the GitHub runner.'
+          }
+          $vcvars = Join-Path $vsRoot 'VC\Auxiliary\Build\vcvars64.bat'
+          if (-not (Test-Path -LiteralPath $vcvars -PathType Leaf)) {
+            throw "vcvars64.bat was not found at $vcvars"
+          }
+
+          $source = Join-Path $env:GITHUB_WORKSPACE 'verify\windows-acl\native\win32-audit.cpp'
+          $buildDirectory = Join-Path $env:RUNNER_TEMP 'node-repl-win32-audit-build'
+          $output = Join-Path $buildDirectory 'node-repl-win32-audit.exe'
+          New-Item -ItemType Directory -Force -Path $buildDirectory | Out-Null
+
+          $compile = "call `"$vcvars`" >nul && cl.exe /nologo /std:c++20 /O2 /MT /W4 /WX /EHsc /DUNICODE /D_UNICODE /Fe:`"$output`" `"$source`""
+          & cmd.exe /d /s /c $compile
+          if ($LASTEXITCODE -ne 0) {
+            throw "MSVC compilation failed with exit code $LASTEXITCODE"
+          }
+
+          foreach ($mode in @('abi', 'handle-sentinel', 'job-settlement')) {
+            & $output $mode
+            if ($LASTEXITCODE -ne 0) {
+              throw "Native audit mode $mode failed with exit code $LASTEXITCODE"
+            }
+          }
+
+          $artifactDirectory = Join-Path $env:GITHUB_WORKSPACE 'native-audit-artifact'
+          New-Item -ItemType Directory -Force -Path $artifactDirectory | Out-Null
+          $artifactExe = Join-Path $artifactDirectory 'node-repl-win32-audit.exe'
+          Copy-Item -LiteralPath $output -Destination $artifactExe -Force
+          $sha256 = (Get-FileHash -LiteralPath $artifactExe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha256 *node-repl-win32-audit.exe" | Set-Content -LiteralPath (Join-Path $artifactDirectory 'SHA256SUMS.txt') -Encoding utf8
+
+          $compilerVersion = (& cmd.exe /d /s /c "call `"$vcvars`" >nul && cl.exe 2>&1" | Select-Object -First 1).Trim()
+          $sdkIncludeRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include'
+          $sdkVersion = if (Test-Path -LiteralPath $sdkIncludeRoot -PathType Container) {
+            (Get-ChildItem -LiteralPath $sdkIncludeRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name)
+          } else {
+            'unknown'
+          }
+          $manifest = [ordered]@{
+            schemaVersion = 1
+            artifact = 'node-repl-win32-audit.exe'
+            sha256 = $sha256
+            sourceCommit = $env:GITHUB_SHA
+            workflowRef = $env:GITHUB_WORKFLOW_REF
+            generatedAt = [DateTime]::UtcNow.ToString('o')
+            runner = [ordered]@{
+              os = $env:RUNNER_OS
+              architecture = $env:RUNNER_ARCH
+              image = $env:ImageOS
+              imageVersion = $env:ImageVersion
+            }
+            compiler = [ordered]@{
+              version = $compilerVersion
+              windowsSdkVersion = $sdkVersion
+              command = 'cl.exe /nologo /std:c++20 /O2 /MT /W4 /WX /EHsc /DUNICODE /D_UNICODE'
+            }
+            selfTestModes = @('abi', 'handle-sentinel', 'job-settlement')
+            nonClaims = @(
+              'This artifact is a non-production evidence helper, not a sandbox or runtime launcher.',
+              'It does not create a restricted token, configure DACL/Low-integrity ACLs, or establish a Windows ACL backend.',
+              'A successful artifact cannot enable sandboxHost required or make an unsupported mode supported.'
+            )
+          }
+          $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $artifactDirectory 'manifest.json') -Encoding utf8
+
+      - name: Upload short-retention evidence helper
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-acl-native-audit-${{ github.sha }}
+          path: native-audit-artifact
+          if-no-files-found: error
+          retention-days: 7
