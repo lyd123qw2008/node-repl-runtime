@@ -1,0 +1,4 @@
+# Phase 0 permits only the reviewed exact native install hook below. Do not add
+# a blanket approval or any unrelated package here.
+allowBuilds:
+  koffi: true

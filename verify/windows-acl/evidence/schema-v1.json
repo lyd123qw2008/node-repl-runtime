@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "node-repl-runtime Windows ACL Phase 0 evidence",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "generatedAt",
+    "evidenceTier",
+    "suite",
+    "status",
+    "confinement",
+    "enforcement",
+    "restrictedToken",
+    "jobOwnership",
+    "daclGrant",
+    "osHandleAllowlistProven",
+    "releaseEligible",
+    "nonClaims"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "evidenceTier": { "type": "string" },
+    "suite": { "type": "string" },
+    "status": { "type": "string" },
+    "confinement": { "enum": ["none", "partial", "full"] },
+    "enforcement": { "enum": ["none", "partial", "full"] },
+    "restrictedToken": { "type": "boolean" },
+    "jobOwnership": { "type": "boolean" },
+    "daclGrant": { "type": "boolean" },
+    "osHandleAllowlistProven": { "type": "boolean" },
+    "releaseEligible": { "const": false },
+    "nonClaims": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  },
+  "additionalProperties": true
+}

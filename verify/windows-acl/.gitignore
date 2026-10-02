@@ -1,0 +1,8 @@
+# Machine-specific Phase 0 observations are deliberately not source artifacts.
+spike/
+
+# The isolated Koffi install must not enter the root workspace or Git state.
+node_modules/
+
+# CI-built native audit artifacts and raw observations never enter Git.
+native-artifacts/
