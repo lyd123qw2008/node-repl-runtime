@@ -30,10 +30,12 @@ SHA256SUMS.txt
 
 `manifest.json` records the source commit, workflow ref, runner image, compiler/SDK
 metadata, tested modes, and the SHA-256 of the executable. The local consumer must
-set the exact expected source commit, require exactly these three regular files,
-reject an executable over 2 MiB, verify both hashes and all manifest fields before
-execution, and write only a non-release evidence record. Artifacts, downloaded
-executables, and raw evidence remain outside Git.
+supply independently recorded exact source-commit **and executable SHA-256** values,
+require exactly these three regular files, reject an executable over 2 MiB, verify
+both hashes and all manifest fields before execution, and write only a non-release
+evidence record. This prevents a substituted executable plus a self-consistent
+replacement manifest from satisfying the contract. Artifacts, downloaded executables,
+and raw evidence remain outside Git.
 
 No DSH source, runtime package, credentials, or workspace contents are sent to the
 workflow. The source and workflow are public because the repository is public.
