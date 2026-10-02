@@ -39,3 +39,37 @@ and raw evidence remain outside Git.
 
 No DSH source, runtime package, credentials, or workspace contents are sent to the
 workflow. The source and workflow are public because the repository is public.
+
+## Tier 20 owned-worker feasibility probe (non-production)
+
+`win32-owned-worker.cpp` is a separate native probe; it does not change the
+production launcher or `sandboxHost` support state. The dedicated CI job compiles it
+and runs the final `node.exe` fixture in both `read-only` and `workspace-write` modes.
+The two recorded passing runs cover both the current Windows runner Node (`v22.23.3`,
+run [37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908))
+and the project minimum (`v22.19.0`, run
+[37015202534](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37015202534)).
+
+The probe records restricted-token and Low-integrity facts, workspace/temp DACLs and
+queried Low labels, explicit environment filtering, default-DACL ACEs, inherited-handle
+sentinel exclusion, UCRT fd 3–7 table plus fd3/carrier traffic, suspended creation → Job
+assignment → resume, ordinary child-process Job settlement, read-only/write-mode path
+behavior, and grant cleanup only after Job quiescence. Its `TIER20_PASS` applies only to
+this owned-worker feasibility probe; `releaseEligible` remains `false`, and both
+confinement and enforcement remain `partial`.
+
+Important measured boundaries:
+
+- On the hosted Windows 2022 runner, a workspace-write token whose default DACL grants
+  only the private temp capability SID failed Node initialization with `0xC0000142`.
+  The passing probe retains that private-temp `FILE_ALL_ACCESS` ACE and adds/verifies a
+  World `FILE_ALL_ACCESS` compatibility ACE. This broad default-object grant needs a
+  separate security review/narrowing before any production adoption; this evidence does
+  not establish object-discovery isolation.
+- A child started with `stdio: 'ignore'` settles under the owned Job. stdout-only,
+  stderr-only, and dual-piped `child_process.spawn()` cases return `EPERM`; the fixture
+  records these as a known partial-boundary diagnostic rather than claiming support.
+- The probe does not establish final packaged-engine startup, the complete runtime
+  protocol/reset/error suite, concurrent broker/owner isolation, bridge lifecycle, or
+  all Windows preflight/negative regressions. It cannot by itself satisfy overall Phase 0
+  acceptance, enable `sandboxHost: 'required'`, or change production/default behavior.
