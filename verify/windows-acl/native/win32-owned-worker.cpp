@@ -797,17 +797,17 @@ int wmain(int argc, wchar_t** argv) {
   }
   result.daclApplied = true;
   const std::wstring seedPath = joinPath(options.workspace, L"tier20-seed.txt");
-  if (!writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), restrictedSid.get(), &error)) {
-    result.error = error;
-    result.phase = "seed-acl";
-    restoreAclForCleanup(options.workspace, &error);
-    restoreAclForCleanup(options.privateTemp, &error);
-    DeleteFileW(seedPath.c_str());
-    RemoveDirectoryW(options.workspace.c_str());
-    RemoveDirectoryW(options.privateTemp.c_str());
-    return printResult(options, result);
+  const std::wstring targetNodePath = joinPath(options.workspace, L"tier20-node.exe");
+  const std::wstring targetWorkerPath = joinPath(options.workspace, L"tier20-worker.mjs");
+  if (CopyFileW(options.node.c_str(), targetNodePath.c_str(), TRUE) == FALSE ||
+      CopyFileW(options.worker.c_str(), targetWorkerPath.c_str(), TRUE) == FALSE ||
+      !applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), restrictedSid.get(), &error) ||
+      !applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), restrictedSid.get(), &error) ||
+      !writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), restrictedSid.get(), &error)) {
+    result.error = error == ERROR_SUCCESS ? GetLastError() : error;
+    result.phase = "target-staging";
+    goto cleanup;
   }
-
   ScopedHandle currentToken;
   HANDLE rawCurrentToken = nullptr;
   if (OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, &rawCurrentToken) == FALSE) {
@@ -921,7 +921,7 @@ int wmain(int argc, wchar_t** argv) {
     startup.StartupInfo.lpReserved2 = descriptorBlock.data();
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION processInformation{};
-    std::wstring commandLine = quoteWindowsArgument(options.node) + L" " + quoteWindowsArgument(options.worker);
+    std::wstring commandLine = quoteWindowsArgument(targetNodePath) + L" " + quoteWindowsArgument(targetWorkerPath);
     std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
     mutableCommand.push_back(L'\0');
 
@@ -929,7 +929,7 @@ int wmain(int argc, wchar_t** argv) {
     DWORD creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED;
     if (CreateProcessAsUserW(
             restrictedToken.get(),
-            options.node.c_str(),
+            targetNodePath.c_str(),
             mutableCommand.data(),
             nullptr,
             nullptr,
@@ -1073,6 +1073,8 @@ cleanup:
     bool cleanedWorkspace = restoreAclForCleanup(options.workspace, &cleanupError);
     bool cleanedTemp = restoreAclForCleanup(options.privateTemp, &cleanupError);
     DeleteFileW(seedPath.c_str());
+    DeleteFileW(targetNodePath.c_str());
+    DeleteFileW(targetWorkerPath.c_str());
     bool removedSeed = GetFileAttributesW(seedPath.c_str()) == INVALID_FILE_ATTRIBUTES;
     bool removedWorkspace = RemoveDirectoryW(options.workspace.c_str()) != FALSE;
     bool removedTemp = RemoveDirectoryW(options.privateTemp.c_str()) != FALSE;
