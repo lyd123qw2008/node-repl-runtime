@@ -939,7 +939,7 @@ int wmain(int argc, wchar_t** argv) {
     result.explicitEnvironmentBlock = true;
     DWORD creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED;
     if (CreateProcessAsUserW(
-            restrictedToken.get(),
+            currentToken.get(),
             targetNodePath.c_str(),
             mutableCommand.data(),
             nullptr,
