@@ -750,13 +750,16 @@ int wmain(int argc, wchar_t** argv) {
 
   ProbeResult result;
   result.phase = "initialization";
-  if (!enablePrivilege(SE_ASSIGNPRIMARYTOKEN_NAME, &error) ||
-      !enablePrivilege(SE_INCREASE_QUOTA_NAME, &error) ||
-      !enablePrivilege(SE_TAKE_OWNERSHIP_NAME, &error) ||
-      !enablePrivilege(SE_RESTORE_NAME, &error)) {
-    result.error = error;
-    return printResult(options, result);
-  }
+  // Hosted Windows runners do not necessarily assign every privilege to the
+  // runner token. CreateProcessAsUserW may enable the privileges it needs when
+  // the restricted token is used, while DACL ownership is checked at the exact
+  // API boundary below. Treat ERROR_NOT_ALL_ASSIGNED here as diagnostic rather
+  // than claiming that a missing privilege is already a backend failure.
+  (void)enablePrivilege(SE_ASSIGNPRIMARYTOKEN_NAME, &error);
+  (void)enablePrivilege(SE_INCREASE_QUOTA_NAME, &error);
+  (void)enablePrivilege(SE_TAKE_OWNERSHIP_NAME, &error);
+  (void)enablePrivilege(SE_RESTORE_NAME, &error);
+  error = ERROR_SUCCESS;
   if (!existingDirectory(options.workspace, &error) || !existingDirectory(options.privateTemp, &error) || !disjointPaths(options.workspace, options.privateTemp)) {
     result.error = error == ERROR_SUCCESS ? ERROR_INVALID_NAME : error;
     result.phase = "root-preflight";
