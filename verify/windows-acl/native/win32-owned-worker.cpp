@@ -86,6 +86,7 @@ class ScopedHandle {
 
 class LocalAcl {
  public:
+  LocalAcl() = default;
   ~LocalAcl() {
     if (acl_ != nullptr) LocalFree(acl_);
   }
@@ -1038,11 +1039,6 @@ int wmain(int argc, wchar_t** argv) {
     stderrDrain.join();
     stdoutDrain.handle.reset();
     stderrDrain.handle.reset();
-    const DWORD exitCode = [&]() {
-      DWORD code = STILL_ACTIVE;
-      GetExitCodeProcess(targetProcess.get(), &code);
-      return code;
-    }();
     result.grantsRevokedAfterQuiescence = result.jobSettled;
     result.cleanup = false;
     targetProcess.reset();
