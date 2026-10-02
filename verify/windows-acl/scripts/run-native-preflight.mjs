@@ -196,9 +196,10 @@ const compilerCandidates = [findOnPath('cl.exe'), findOnPath('g++.exe'), findOnP
 const nativeAuditReferenceInput = {
   directory: process.env.NODE_REPL_VERIFY_NATIVE_AUDIT_DIR,
   sourceCommit: process.env.NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT,
+  executableSha256: process.env.NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256,
 }
 const nativeAuditReference = {
-  status: nativeAuditReferenceInput.directory === undefined && nativeAuditReferenceInput.sourceCommit === undefined
+  status: nativeAuditReferenceInput.directory === undefined && nativeAuditReferenceInput.sourceCommit === undefined && nativeAuditReferenceInput.executableSha256 === undefined
     ? 'NOT_RUN'
     : 'SEPARATE_EVIDENCE_REQUIRED',
   input: nativeAuditReferenceInput,

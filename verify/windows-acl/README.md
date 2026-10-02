@@ -115,20 +115,22 @@ Windows ACL mode supported.
 
 Download an exact successful workflow artifact outside the repository, then require
 its full source commit while verifying it locally. The verifier rejects a missing
-commit, unexpected/missing artifact files, an executable over 2 MiB, invalid
-manifest fields, mismatched SHA-256, unexpected runner/compiler/SDK provenance, or
-a failing audit mode. It emits `UNSUPPORTED` and exit `2` rather than executing an
-untrusted artifact.
+commit or independently recorded executable SHA-256, unexpected/missing artifact
+files, an executable over 2 MiB, invalid manifest fields, mismatched SHA-256,
+unexpected runner/compiler/SDK provenance, or a failing audit mode. It emits
+`UNSUPPORTED` and exit `2` rather than executing an untrusted artifact.
 
 ```powershell
-$run = 36996109769 # replace only with a reviewed successful run
-$commit = '09977d9961c091d6135e00b157db0d3959105161' # exact full source commit for that run
+$run = 36997631166 # replace only with a reviewed successful run
+$commit = '93863b13532c4165ed9ff4d2edb71860bd0a3119' # exact full source commit for that run
+$sha256 = '74e9aa89d8b5729ade26f04cb5f466bee26861360c5fe2c096fcb31aa6c5c0df' # independently recorded EXE hash
 $name = "windows-acl-native-audit-$commit"
 $base = Join-Path $env:LOCALAPPDATA "node-repl-runtime-phase0\$commit"
 $artifact = Join-Path $base 'github-artifact'
 $env:NODE_REPL_VERIFY_OUT = Join-Path $base 'evidence'
 $env:NODE_REPL_VERIFY_NATIVE_AUDIT_DIR = $artifact
 $env:NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT = $commit
+$env:NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256 = $sha256
 New-Item -ItemType Directory -Force -Path $artifact | Out-Null
 
 gh run download $run --repo lyd123qw2008/node-repl-runtime --name $name --dir $artifact

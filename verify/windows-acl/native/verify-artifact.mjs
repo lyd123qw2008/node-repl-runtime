@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 
 const artifactInput = process.env.NODE_REPL_VERIFY_NATIVE_AUDIT_DIR
 const expectedCommit = process.env.NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT?.toLowerCase()
+const expectedExecutableSha256 = process.env.NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256?.toLowerCase()
 const requestedEvidenceRoot = process.env.NODE_REPL_VERIFY_OUT
 const verifierRoot = fileURLToPath(new URL('../', import.meta.url))
 const runId = `${new Date().toISOString().replaceAll(/[:.]/g, '-')}-${randomUUID()}`
@@ -86,6 +87,8 @@ try {
     outcome = artifactFailure('Set NODE_REPL_VERIFY_NATIVE_AUDIT_DIR to the extracted GitHub Actions artifact directory.')
   } else if (expectedCommit === undefined) {
     outcome = artifactFailure('Set NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT to the exact full source commit that produced the artifact.')
+  } else if (expectedExecutableSha256 === undefined) {
+    outcome = artifactFailure('Set NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256 to an independently recorded exact executable SHA-256.')
   } else {
     const inputDirectory = resolve(artifactInput)
     requireCondition(statSync(inputDirectory).isDirectory(), 'The artifact directory is not an existing directory.')
@@ -119,8 +122,11 @@ try {
     requireCondition(Array.isArray(manifest.selfTestModes) && expectedModes.every(mode => manifest.selfTestModes.includes(mode)), 'Artifact manifest omits a required self-test mode.')
     requireCondition(/^[a-f0-9]{40}$/u.test(expectedCommit), 'NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT must be a full SHA-1 commit id.')
     requireCondition(manifest.sourceCommit === expectedCommit, 'Artifact source commit does not equal NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT.')
+    requireCondition(/^[a-f0-9]{64}$/u.test(expectedExecutableSha256), 'NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256 must be a full SHA-256 digest.')
+    requireCondition(manifest.sha256 === expectedExecutableSha256, 'Artifact manifest SHA-256 does not equal NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256.')
 
     const computedSha256 = sha256(executable)
+    requireCondition(computedSha256 === expectedExecutableSha256, 'Artifact executable SHA-256 does not equal NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256.')
     requireCondition(computedSha256 === manifest.sha256, 'Artifact executable SHA-256 does not match manifest.json.')
     requireCondition(
       checksumText.trim() === `${computedSha256} *node-repl-win32-audit.exe`,

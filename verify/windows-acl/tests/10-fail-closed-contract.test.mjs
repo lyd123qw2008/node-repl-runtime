@@ -17,6 +17,7 @@ function childEnvironment(outputRoot) {
     NODE_REPL_VERIFY_ACL_ROOT: _aclRoot,
     NODE_REPL_VERIFY_NATIVE_AUDIT_DIR: _nativeAuditDirectory,
     NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT: _nativeAuditCommit,
+    NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256: _nativeAuditSha256,
     NODE_REPL_VERIFY_NODE: _nodeExecutable,
     NODE_REPL_VERIFY_OUT: _output,
     ...environment
@@ -76,9 +77,30 @@ test('10: DSH reference baseline fails closed without an explicit clean source r
   assert.equal(evidence.failure.code, 'DSH_ROOT_REQUIRED')
 })
 
-test('10: CI native artifact verifier fails closed without an exact artifact directory and source commit', { skip: !windowsOnly }, async () => {
+test('10: CI native artifact verifier fails closed without an exact artifact directory, source commit, and expected hash', { skip: !windowsOnly }, async () => {
   const evidence = await runFailClosed('../native/verify-artifact.mjs', '10-ci-native-audit-artifact')
   assert.equal(evidence.failure.code, 'NATIVE_AUDIT_ARTIFACT_INVALID')
+})
+
+test('10: CI native artifact verifier requires an independently supplied executable hash', { skip: !windowsOnly }, async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'node-repl-phase0-ci-audit-hash-contract-'))
+  try {
+    const result = spawnSync(process.execPath, [join(verifierRoot, 'native', 'verify-artifact.mjs')], {
+      cwd: verifierRoot,
+      env: {
+        ...childEnvironment(outputRoot),
+        NODE_REPL_VERIFY_NATIVE_AUDIT_DIR: 'C:\\node-repl-phase0-unneeded-before-hash-check',
+        NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT: '93863b13532c4165ed9ff4d2edb71860bd0a3119',
+      },
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    assert.equal(result.status, 2)
+    const evidence = await readUnsupportedEvidence(outputRoot, '10-ci-native-audit-artifact')
+    assert.match(evidence.failure.message, /NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256/u)
+  } finally {
+    await rm(outputRoot, { recursive: true, force: true })
+  }
 })
 
 test('10: exact Koffi loads and selected x64 Win32 ABI declarations bind without creating a sandbox', { skip: !windowsOnly }, () => {
@@ -114,10 +136,12 @@ test('10: native preflight records CI audit input only as separate evidence', { 
   try {
     const evidence = await runPreflightReport(aclRoot, undefined, {
       NODE_REPL_VERIFY_NATIVE_AUDIT_DIR: 'C:\\node-repl-phase0-artifact',
-      NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT: '09977d9961c091d6135e00b157db0d3959105161',
+      NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT: '93863b13532c4165ed9ff4d2edb71860bd0a3119',
+      NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256: '74e9aa89d8b5729ade26f04cb5f466bee26861360c5fe2c096fcb31aa6c5c0df',
     })
     assert.equal(evidence.gates.ciNativeAuditReference.status, 'SEPARATE_EVIDENCE_REQUIRED')
-    assert.equal(evidence.gates.ciNativeAuditReference.input.sourceCommit, '09977d9961c091d6135e00b157db0d3959105161')
+    assert.equal(evidence.gates.ciNativeAuditReference.input.sourceCommit, '93863b13532c4165ed9ff4d2edb71860bd0a3119')
+    assert.equal(evidence.gates.ciNativeAuditReference.input.executableSha256, '74e9aa89d8b5729ade26f04cb5f466bee26861360c5fe2c096fcb31aa6c5c0df')
     assert.ok(evidence.blockingGates.some(gate => gate.name === 'ciNativeAuditReference' && gate.status === 'SEPARATE_EVIDENCE_REQUIRED'))
   } finally {
     await rm(aclRoot, { recursive: true, force: true })

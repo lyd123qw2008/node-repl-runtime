@@ -72,24 +72,25 @@ compiles the own-source probe on `windows-2022`. The source and workflow were pu
 only to the explicit public branch `ci/windows-acl-native-audit`; no release,
 published package, production runtime source, DSH checkout, or profile was changed.
 
-The final reviewed run is [`36996109769`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36996109769):
+The final reviewed run is [`36997631166`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36997631166):
 
-- source commit: `09977d9961c091d6135e00b157db0d3959105161`;
+- source commit: `93863b13532c4165ed9ff4d2edb71860bd0a3119`;
 - runner: Windows Server 2022 / `windows-2022`, x64, image `20260927.320.1`;
 - compiler: MSVC `19.44.35229` / Windows SDK `10.0.26100.0`;
 - executable: `177,664` bytes, SHA-256
-  `223c5dca12ae6001ee5335c30df151f711834b3f76d9454e5f01918a2dd6b2cb`;
+  `74e9aa89d8b5729ade26f04cb5f466bee26861360c5fe2c096fcb31aa6c5c0df`;
 - GitHub artifact archive SHA-256:
-  `8df1719d683079b1a4855f274dafa11f29bc092dd1cb5fae7552df18be33d9be`;
-- artifact ID `11221453178`, retained only through 2026-10-09;
+  `0fcc10e492726c5e39ec68940c342aa6c14c36d36b21f05819524ec92e608231`;
+- artifact ID `11221962842`, retained only through 2026-10-09;
 - CI and local re-execution both passed `abi`, `handle-sentinel`, and
   `job-settlement`.
 
-The local verifier requires that exact source commit, exactly the three expected
-artifact files, a <=2 MiB executable, manifest/compiler/SDK/runner checks, both
-embedded SHA-256 checks, and all three local modes before writing
-`NATIVE_AUDIT_PASS`. The final raw local evidence is
-`C:\Users\32664\AppData\Local\node-repl-runtime-phase0\20261002T103500Z-9af4a695098b4c36bea21a02bc1bb64e\evidence\10-ci-native-audit-artifact\evidence.json`.
+The local verifier requires that exact source commit **and independently recorded
+executable SHA-256**, exactly the three expected artifact files, a <=2 MiB
+executable, manifest/compiler/SDK/runner checks, both embedded SHA-256 checks, and
+all three local modes before writing `NATIVE_AUDIT_PASS`. The final raw local
+evidence is
+`C:\Users\32664\AppData\Local\node-repl-runtime-phase0\20261002T105200Z-e513b14fabcb424a9fb38cf85e17f3cc\evidence\10-ci-native-audit-artifact\evidence.json`.
 
 This removes the **local compiler installation** gap only. It provides a small,
 independent Windows-header/handle-list/Job-accounting oracle, not an owned sandbox
