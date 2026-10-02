@@ -81,10 +81,11 @@ Important measured boundaries:
   workspace-write (World/full is used in read-only). The DSH and probe also differ in
   environment delivery and launch topology. This does not isolate the cause. Treat the
   probe World ACE as temporary test-only compatibility evidence, not a production fix.
-  One bounded A1-A5 matrix is being run on a single Windows 2022 / Node 22.19 runner;
-  it only parameterizes the existing direct launcher for temp-ACE flags/environment,
-  keeps all other defaults unchanged, and will not be iterated. See the [experiment
-  definition and stop rules](../evidence/RESULTS.md#bounded-a1a5-workspace-write-differential-single-ci-run) and the full [DSH comparison](../evidence/DSH-COMPARISON.md).
+  The single A1-A5 matrix on Windows 2022 / Node 22.19 was inconclusive due retained-
+  artifact/validator defects, but A1 did not pass; the stop rule keeps workspace-write
+  unsupported. No rerun or probe expansion follows. See the [measured outcome and
+  stop rule](../evidence/RESULTS.md#bounded-a1a5-workspace-write-differential-one-ci-run-inconclusive)
+  and the full [DSH comparison](../evidence/DSH-COMPARISON.md).
 - A child started with `stdio: 'ignore'` settles under the owned Job. stdout-only,
   stderr-only, and dual-piped `child_process.spawn()` cases return `EPERM`, matching the
   pinned DSH Windows ACL documented/tested boundary. This remains unsupported in v1 and

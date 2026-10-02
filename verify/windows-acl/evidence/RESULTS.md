@@ -8,12 +8,13 @@ Windows ACL confinement is available in node-repl-runtime.
 
 | Tier | Command / source | Result | Allowed conclusion |
 | --- | --- | --- | --- |
-| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl test` | **PASS**: 7 transport/launch cases plus 12 Tier 10 preflight/reference fail-closed, ABI, or boundary cases and 1 Tier 20 fail-closed contract (20 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
+| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl test` | **PASS**: 7 transport/launch cases plus 12 Tier 10 preflight/reference fail-closed, ABI, or boundary cases and 2 Tier 20 fail-closed contracts (21 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
 | `00-unconfined-node-fd7` evidence | `node scripts/run-unconfined-fd7.mjs` with an external `NODE_REPL_VERIFY_OUT` | **REFERENCE_PASS** | Node v24.15.0 x64 used real `node.exe`; the host-first version-1 handshake, marker consumption, state/reset, bounded output, and normal direct-child exit were observed. |
 | `10-dsh-source-baseline` | pinned DSH `f9d6609d182969c9f57499ef552edb78835cc4e4`, `sandbox-windows-acl/tests/control.spec.ts` | **REFERENCE_PASS**: 3 tests | The external DSH nested runner reference can reach a final restricted Node payload with captured stdout/stderr and fd 7 binary control. It remains an external oracle only. |
 | `10-ci-native-audit-artifact` | GitHub Actions run [`36996109769`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36996109769), then local hash/manifest/mode verification | **NATIVE_AUDIT_PASS**, reference-only | CI MSVC/Windows SDK independently compiled and self-tested ABI, OS handle-list sentinel, and bounded Job-zero-active accounting facts; no token/ACL/Node launcher support follows. |
 | `10-native-abi-and-koffi-preflight` | `node scripts/run-native-preflight.mjs` | **UNSUPPORTED**, expected exit `2`; exact isolated Koffi x64 ABI/loadability sub-check passed | The owned Windows required path is fail-closed; a Koffi binding preflight is not token/ACL/Job evidence and no raw-Node fallback is authorized. |
 | `20-owned-restricted-token-job` | GitHub Actions run [`37029476316`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37029476316) (`v22.19.0`, exact SID/DACL/Low/pipe inspectors, ordered TokenDefaultDacl ACE snapshots, fd 0–7 and outside-path matrix); earlier `v22.23.3` core run [`37014751908`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | **OWNED_WORKER_PROBE_PASS (not formal Tier 20 acceptance)**, both `read-only` and `workspace-write`; artifact reports `releaseEligible=false`, `confinement=enforcement=partial` | Proves only the enumerated fixture facts; it is not Phase 0 overall acceptance or a runtime backend. External sibling-root write/delete are denied, and protected DACL masks/cross-capability exclusion plus default-DACL ACE order/masks/flags are queried. The probe write-mode TokenDefaultDacl still has a probe-only World ACE that diverges from the measured DSH runner. Cell-owned piped child stdio is a DSH-documented unsupported boundary, not a Phase 0 blocker. |
+| `20-workspace-write-differential` | One-shot GitHub Actions run [`37038295237`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37038295237) (`windows-2022`, Node `v22.19.0`) | **MATRIX_INCONCLUSIVE**; A1 failed its ignored-grandchild check with `0xC0000142`; A2/A3/A4 native statuses were `FAIL`; same-job A5 evidence passed | Stop using Windows workspace-write as a Phase 0 primary route. The artifact collector overwrote matrix details and the A5 aggregate check used the wrong field path, so A4's exact status/root cause is not established; no rerun is authorized. |
 | Existing runtime regression | root `pnpm test` | **PASS**: 59 runtime, 15 adapter, 9 bootstrap tests | The isolated `verify/` addition did not alter the existing workspace build/test result. |
 
 Raw JSON observations are machine-local and intentionally ignored. They are
@@ -97,23 +98,45 @@ does not identify why the earlier hosted Node `v22.19.0` probe required its extr
 ACE. No replacement ACL recipe is inferred; see
 [DSH-COMPARISON.md](DSH-COMPARISON.md) for the exact source and test matrix.
 
-### Bounded A1–A5 workspace-write differential (single CI run)
+### Bounded A1–A5 workspace-write differential (one CI run; inconclusive)
 
-The next and only planned compatibility experiment is one sequential matrix on one
-`windows-2022` runner under Node `v22.19.0`; the DSH source is fetched at pinned revision
-`f9d6609d182969c9f57499ef552edb78835cc4e4` and installed with its frozen lockfile. A1 runs
-the real DSH workspace-write runner. A2 and A3 reuse the existing direct Tier 20 worker,
-changing only (respectively) the temp ACE flags to `0x03` or the environment API to
-DSH-style parent inheritance. A4 is temp-only / flags 0 / explicit-environment failure
-control. A5 is the existing temp+World / flags 0 / explicit-environment pass control
-from the same job. No new ACL/Job/handle mechanism is added; the diagnostic selector
-defaults preserve the old probe path.
+The one sequential matrix ran on a single `windows-2022` runner under Node `v22.19.0`,
+with DSH revision `f9d6609d182969c9f57499ef552edb78835cc4e4` installed from its frozen
+lockfile: [run 37038295237](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37038295237).
+A1 invoked the real DSH workspace-write runner. A2/A3 used the existing direct Tier 20
+worker with temp-only ACE flags `0x03` or the DSH-style inherited environment. A4 was the
+temp-only / flags-0 / explicit-environment control. A5 reused the same-job existing
+Tier 20 temp+World / flags-0 evidence; it was not launched twice. No production/default
+behavior changed.
 
-The matrix is valid only if A4 reproduces Node status `0xC0000142` and A5 passes. A1/A2/A3
-outcomes are interpreted exactly by the user stop rule. No retry or second guessed ACL
-variant will follow an inconclusive or completed matrix. Cell-owned piped stdio is not in
-any go/no-go predicate. Until the artifact is inspected, this experiment changes no
-acceptance state and authorizes no product workaround.
+**Observed A1:** the top-level DSH token-inspector Node `v22.19.0` process exited 0 and
+matched the expected restricted SID set, Low RID 4096, temp-capability `FILE_ALL_ACCESS`
+default ACE with flags `0x03`, no World full-access ACE, and TMP/TEMP under the private
+temp root. However, the fixture's `stdio: 'ignore'` grandchild exited `3221225794`
+(`0xC0000142`), so A1's inherited/ignored-child gate failed. The `stdio: 'pipe'`
+grandchild returned `EPERM`, but that check was recorded as diagnostic only and did not
+cause A1's failure. A2, A3, and A4 were summarized as native `FAIL`; the run summary did
+not retain enough per-case JSON to certify each direct failure detail or A4's exact exit
+code.
+
+**A5 control:** the separately uploaded same-job evidence is `OWNED_WORKER_PROBE_PASS`
+with temp/full/flags-0 at default-DACL index 0 and World/full/flags-0 at index 1; job
+assignment, settlement, quiescent revocation, and cleanup are true. The differential
+aggregator nevertheless returned `MATRIX_INCONCLUSIVE`: its A5 validator looked for
+`targetAssignedToJob` and `jobSettled` at the wrapper level rather than inside the
+`native` result. In addition, CI copied both `evidence.json` files to the same artifact
+filename, so the DSH snapshot overwrote the matrix's detailed A2–A4 records. Therefore
+the same-run A4 control cannot be certified from the retained artifact, even though its
+native status was `FAIL`.
+
+**Decision:** apply the fail-closed stop rule—Windows workspace-write remains unsupported
+and is not a Phase 0 primary route. A1 did not pass because a Node 22.19 grandchild using
+`stdio: 'ignore'` failed with `0xC0000142`; A2/A3 also reported `FAIL`, and no narrow
+candidate was observed. Do not infer the cause of the original direct A4 startup failure:
+the matrix is inconclusive because the A4 detail was not retained. No second run or
+additional guessed ACL variant will be made. Piped-grandchild `EPERM` remains outside the
+go/no-go decision. Formal Tier 20 and Phase 0 remain **NOT ACCEPTED**; keep
+`sandboxHost: required` unsupported/fail-closed.
 
 ## CI-built native audit reference
 

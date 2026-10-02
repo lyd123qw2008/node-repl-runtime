@@ -7,11 +7,12 @@ The external reference source is DSH revision
 the caller's DSH worktree: the selected ACL/token/runner/test files were clean, but
 unrelated paths including the lockfile were dirty, so that result alone did not prove a
 fully clean dependency install. In round 2, the workspace-write snapshot was repeated from
-a fresh detached clone with `pnpm@11.7.0` and `--frozen-lockfile`; the runner now checks
+a fresh detached clone with `pnpm@11.7.0` and `--frozen-lockfile`; the runner checks
 and hashes root package/workspace/lock manifests as well as the ACL/token/runner/test
 files. That clean-clone workspace-write smoke reproduced the temp-only inheritable ACE
-under Node `v24.15.0`. The one-shot Windows CI matrix installs the same pinned DSH commit
-from its frozen lockfile before running A1 under Node `v22.19.0`.
+under Node `v24.15.0`. The single Windows CI run installed the same pinned DSH commit
+from its frozen lockfile and ran A1 under Node `v22.19.0`; its incomplete outcome and
+fail-closed decision are recorded in [RESULTS.md](RESULTS.md).
 
 ## Actual DSH final-token observation
 
