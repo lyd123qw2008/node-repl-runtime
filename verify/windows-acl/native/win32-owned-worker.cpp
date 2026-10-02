@@ -177,6 +177,8 @@ struct ProbeResult {
   bool tokenRestricted = false;
   bool tokenLow = false;
   bool daclApplied = false;
+  bool lowLabelApplied = false;
+  bool defaultDaclGrant = false;
   bool explicitEnvironmentBlock = false;
   bool handleAllowlist = false;
   bool crtDescriptorTable = false;
@@ -385,6 +387,45 @@ bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID admi
     *error = result;
     return false;
   }
+  return true;
+}
+
+bool queryLowLabel(const std::wstring& path, PSID lowSid, bool* present, DWORD* error) {
+  PACL sacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  DWORD result = GetNamedSecurityInfoW(
+      const_cast<LPWSTR>(path.c_str()),
+      SE_FILE_OBJECT,
+      LABEL_SECURITY_INFORMATION,
+      nullptr,
+      nullptr,
+      nullptr,
+      &sacl,
+      &descriptor);
+  if (result != ERROR_SUCCESS) {
+    *error = result;
+    return false;
+  }
+  *present = false;
+  if (sacl != nullptr && IsValidAcl(sacl) != FALSE) {
+    for (DWORD index = 0; index < sacl->AceCount; ++index) {
+      LPVOID rawAce = nullptr;
+      if (GetAce(sacl, index, &rawAce) == FALSE) {
+        *error = GetLastError();
+        if (descriptor != nullptr) LocalFree(descriptor);
+        return false;
+      }
+      auto* header = reinterpret_cast<PACE_HEADER>(rawAce);
+      if (header->AceType != SYSTEM_MANDATORY_LABEL_ACE_TYPE) continue;
+      auto* fields = reinterpret_cast<PACCESS_ALLOWED_ACE>(rawAce);
+      PSID aceSid = reinterpret_cast<PSID>(&fields->SidStart);
+      if ((fields->Mask & SYSTEM_MANDATORY_LABEL_NO_WRITE_UP) != 0 && EqualSid(aceSid, lowSid) != FALSE) {
+        *present = true;
+        break;
+      }
+    }
+  }
+  if (descriptor != nullptr) LocalFree(descriptor);
   return true;
 }
 
@@ -699,7 +740,7 @@ struct DrainState {
   }
 };
 
-bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, bool* restricted, bool* low, DWORD* error) {
+bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, PSID expectedDefaultDaclSid, bool* restricted, bool* defaultDaclGrant, bool* low, DWORD* error) {
   ScopedHandle token;
   HANDLE raw = nullptr;
   if (OpenProcessToken(process, TOKEN_QUERY, &raw) == FALSE) {
@@ -735,6 +776,37 @@ bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, bool* restricte
     }
   }
   *restricted = *restricted && foundExpected;
+
+  DWORD defaultDaclSize = 0;
+  GetTokenInformation(token.get(), TokenDefaultDacl, nullptr, 0, &defaultDaclSize);
+  if (defaultDaclSize == 0) {
+    *error = GetLastError();
+    return false;
+  }
+  std::vector<BYTE> defaultDaclInfo(defaultDaclSize);
+  if (GetTokenInformation(token.get(), TokenDefaultDacl, defaultDaclInfo.data(), defaultDaclSize, &defaultDaclSize) == FALSE) {
+    *error = GetLastError();
+    return false;
+  }
+  auto* tokenDefaultDacl = reinterpret_cast<PTOKEN_DEFAULT_DACL>(defaultDaclInfo.data());
+  *defaultDaclGrant = false;
+  if (tokenDefaultDacl->DefaultDacl != nullptr && IsValidAcl(tokenDefaultDacl->DefaultDacl) != FALSE) {
+    for (DWORD index = 0; index < tokenDefaultDacl->DefaultDacl->AceCount; ++index) {
+      LPVOID rawAce = nullptr;
+      if (GetAce(tokenDefaultDacl->DefaultDacl, index, &rawAce) == FALSE) {
+        *error = GetLastError();
+        return false;
+      }
+      auto* header = reinterpret_cast<PACE_HEADER>(rawAce);
+      if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+      auto* allow = reinterpret_cast<PACCESS_ALLOWED_ACE>(rawAce);
+      PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
+      if (EqualSid(aceSid, expectedDefaultDaclSid) != FALSE && (allow->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS) {
+        *defaultDaclGrant = true;
+        break;
+      }
+    }
+  }
 
   DWORD size = 0;
   GetTokenInformation(token.get(), TokenIntegrityLevel, nullptr, 0, &size);
@@ -824,7 +896,7 @@ int printResult(const Options& options, const ProbeResult& result) {
   const std::string status = result.pass ? "PASS" : "FAIL";
   std::printf(
       "{\"schemaVersion\":2,\"tool\":\"%s\",\"mode\":\"%s\",\"status\":\"%s\","
-      "\"tokenRestricted\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,"
+      "\"tokenRestricted\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,"
       "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
       "\"jobCreated\":%s,\"targetProcessCreated\":%s,\"targetProcessExited\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,\"targetExitSuccess\":%s,"
@@ -835,6 +907,8 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.tokenRestricted).c_str(),
       jsonBool(result.tokenLow).c_str(),
       jsonBool(result.daclApplied).c_str(),
+      jsonBool(result.lowLabelApplied).c_str(),
+      jsonBool(result.defaultDaclGrant).c_str(),
       jsonBool(result.explicitEnvironmentBlock).c_str(),
       jsonBool(result.handleAllowlist).c_str(),
       jsonBool(result.crtDescriptorTable).c_str(),
@@ -988,6 +1062,28 @@ int wmain(int argc, wchar_t** argv) {
   }
   result.daclApplied = true;
   {
+    bool nodeLabel = false;
+    bool workerLabel = false;
+    bool seedLabel = false;
+    bool workspaceLabel = false;
+    bool tempLabel = false;
+    if (!queryLowLabel(targetNodePath, lowSid.get(), &nodeLabel, &error) ||
+        !queryLowLabel(targetWorkerPath, lowSid.get(), &workerLabel, &error) ||
+        !queryLowLabel(seedPath, lowSid.get(), &seedLabel, &error) ||
+        !queryLowLabel(options.workspace, lowSid.get(), &workspaceLabel, &error) ||
+        !queryLowLabel(options.privateTemp, lowSid.get(), &tempLabel, &error)) {
+      result.error = error;
+      result.phase = "inspect-low-label";
+      goto cleanup;
+    }
+    result.lowLabelApplied = nodeLabel && workerLabel && seedLabel && workspaceLabel && tempLabel;
+    if (!result.lowLabelApplied) {
+      result.error = ERROR_INVALID_SECURITY_DESCR;
+      result.phase = "low-label-missing";
+      goto cleanup;
+    }
+  }
+  {
     std::array<SID_AND_ATTRIBUTES, 4> restrictingAttributes{};
     restrictingAttributes[0] = SID_AND_ATTRIBUTES{logonSid.get(), 0};
     restrictingAttributes[1] = SID_AND_ATTRIBUTES{worldSid.get(), 0};
@@ -1136,7 +1232,7 @@ int wmain(int argc, wchar_t** argv) {
     for (auto& carrier : carrierChild) carrier.reset();
     result.tokenRestricted = false;
     result.tokenLow = false;
-    if (!queryTokenFacts(targetProcess.get(), logonSid.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
+    if (!queryTokenFacts(targetProcess.get(), logonSid.get(), defaultDaclCapability, &result.tokenRestricted, &result.defaultDaclGrant, &result.tokenLow, &error)) {
       result.error = error;
       result.phase = "inspect-target-token";
       TerminateProcess(targetProcess.get(), 1);
@@ -1312,8 +1408,8 @@ cleanup:
       result.phase = quiescent ? "cleanup" : "cleanup-before-quiescence";
     }
   }
-  result.pass = result.daclApplied && result.tokenRestricted && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist &&
-      result.crtDescriptorTable && result.fd3RoundTrip && result.carrierReads && result.jobCreated && result.targetAssignedToJob && result.targetResumed && result.jobSettled &&
+  result.pass = result.daclApplied && result.lowLabelApplied && result.defaultDaclGrant && result.tokenRestricted && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist &&
+      result.crtDescriptorTable && result.fd3RoundTrip && result.carrierReads && result.jobCreated && result.targetProcessCreated && result.targetProcessExited && result.targetAssignedToJob && result.targetResumed && result.jobSettled &&
       result.grantsRevokedAfterQuiescence && result.cleanup && result.targetReady && result.targetReportPass && result.targetExitSuccess;
   if (result.pass) result.phase = "complete";
   return printResult(options, result);

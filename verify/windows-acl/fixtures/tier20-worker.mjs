@@ -39,7 +39,7 @@ async function spawnSettlementProbe(stdio = 'ignore') {
     let settled = false
     let child
     try {
-      child = spawn(process.execPath, ['-e', 'process.stdout.write("tier20-child-settled\\n"); setTimeout(() => process.exit(0), 25)'], {
+      child = spawn(process.execPath, ['-e', 'process.stdout.write("tier20-child-settled\\n"); process.stderr.write("tier20-child-stderr\\n"); setTimeout(() => process.exit(0), 25)'], {
         cwd: process.cwd(),
         env: process.env,
         stdio,
@@ -162,11 +162,23 @@ if (!checks.childSettlement.started || checks.childSettlement.exitCode !== 0 || 
   checks.ok = false
   checks.failures.push('child-settlement')
 }
-checks.pipedChildSettlement = await spawnSettlementProbe(['ignore', 'pipe', 'pipe'])
-if (!checks.pipedChildSettlement.started || checks.pipedChildSettlement.exitCode !== 0 || checks.pipedChildSettlement.signal !== null ||
-    checks.pipedChildSettlement.stdout !== 'tier20-child-settled\n' || checks.pipedChildSettlement.stderr !== '') {
+checks.stdoutPipeSettlement = await spawnSettlementProbe(['ignore', 'pipe', 'ignore'])
+if (!checks.stdoutPipeSettlement.started || checks.stdoutPipeSettlement.exitCode !== 0 || checks.stdoutPipeSettlement.signal !== null ||
+    checks.stdoutPipeSettlement.stdout !== 'tier20-child-settled\n') {
   checks.ok = false
-  checks.failures.push('child-piped-stdio')
+  checks.failures.push('child-stdout-pipe')
+}
+checks.stderrPipeSettlement = await spawnSettlementProbe(['ignore', 'ignore', 'pipe'])
+if (!checks.stderrPipeSettlement.started || checks.stderrPipeSettlement.exitCode !== 0 || checks.stderrPipeSettlement.signal !== null ||
+    checks.stderrPipeSettlement.stderr !== 'tier20-child-stderr\n') {
+  checks.ok = false
+  checks.failures.push('child-stderr-pipe')
+}
+checks.dualPipeSettlement = await spawnSettlementProbe(['ignore', 'pipe', 'pipe'])
+if (!checks.dualPipeSettlement.started || checks.dualPipeSettlement.exitCode !== 0 || checks.dualPipeSettlement.signal !== null ||
+    checks.dualPipeSettlement.stdout !== 'tier20-child-settled\n' || checks.dualPipeSettlement.stderr !== 'tier20-child-stderr\n') {
+  checks.ok = false
+  checks.failures.push('child-dual-pipe')
 }
 
 function readExactly(fd, length) {
