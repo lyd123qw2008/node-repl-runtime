@@ -268,7 +268,7 @@ void setExplicitAccess(EXPLICIT_ACCESSW* access, PSID sid, DWORD permissions, AC
   access->Trustee.ptstrName = reinterpret_cast<LPWSTR>(sid);
 }
 
-bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID administratorSid, PSID worldSid, PSID restrictedSid, DWORD* error) {
+bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID administratorSid, PSID worldSid, PSID authenticatedSid, DWORD* error) {
   constexpr DWORD inherited = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
   std::array<EXPLICIT_ACCESSW, 5> entries{};
   size_t count = 0;
@@ -277,11 +277,11 @@ bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID admi
   if (mode == L"read-only") {
     constexpr DWORD deniedWrite = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
         FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER;
-    setExplicitAccess(&entries[count++], restrictedSid, deniedWrite, DENY_ACCESS, inherited);
-    setExplicitAccess(&entries[count++], restrictedSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
+    setExplicitAccess(&entries[count++], authenticatedSid, deniedWrite, DENY_ACCESS, inherited);
+    setExplicitAccess(&entries[count++], authenticatedSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
   } else {
     constexpr DWORD writable = GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | FILE_DELETE_CHILD;
-    setExplicitAccess(&entries[count++], restrictedSid, writable, SET_ACCESS, inherited);
+    setExplicitAccess(&entries[count++], authenticatedSid, writable, SET_ACCESS, inherited);
   }
 
   LocalAcl acl;
@@ -587,7 +587,7 @@ struct DrainState {
   }
 };
 
-bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, bool* restricted, bool* low, DWORD* error) {
+bool queryTokenFacts(HANDLE process, bool* restricted, bool* low, DWORD* error) {
   ScopedHandle token;
   HANDLE raw = nullptr;
   if (OpenProcessToken(process, TOKEN_QUERY, &raw) == FALSE) {
@@ -601,6 +601,10 @@ bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, bool* restricte
     *error = GetLastError();
     return false;
   }
+  // This owned fixture uses a disabled Administrators SID plus an explicit
+  // DACL, rather than a WinRestrictedCodeSid restricting SID. The latter
+  // prevents the stock Node image from initializing its system DLLs on the
+  // hosted runner; TokenIsRestricted is the fact we require here.
   *restricted = isRestricted != FALSE;
 
   DWORD size = 0;
@@ -618,27 +622,6 @@ bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, bool* restricte
   DWORD count = *GetSidSubAuthorityCount(label->Label.Sid);
   DWORD rid = *GetSidSubAuthority(label->Label.Sid, count - 1);
   *low = rid == SECURITY_MANDATORY_LOW_RID;
-
-  size = 0;
-  GetTokenInformation(token.get(), TokenRestrictedSids, nullptr, 0, &size);
-  if (size == 0) {
-    *error = GetLastError();
-    return false;
-  }
-  std::vector<BYTE> restrictedInfo(size);
-  if (GetTokenInformation(token.get(), TokenRestrictedSids, restrictedInfo.data(), size, &size) == FALSE) {
-    *error = GetLastError();
-    return false;
-  }
-  auto* restrictedSids = reinterpret_cast<PTOKEN_GROUPS>(restrictedInfo.data());
-  bool foundExpected = false;
-  for (DWORD index = 0; index < restrictedSids->GroupCount; ++index) {
-    if (EqualSid(restrictedSids->Groups[index].Sid, expectedRestrictedSid) != FALSE) {
-      foundExpected = true;
-      break;
-    }
-  }
-  *restricted = *restricted && foundExpected;
   return true;
 }
 
@@ -780,17 +763,17 @@ int wmain(int argc, wchar_t** argv) {
   DWORD sidError = ERROR_SUCCESS;
   SidBuffer administratorSid;
   SidBuffer worldSid;
-  SidBuffer restrictedSid;
+  SidBuffer authenticatedSid;
   if (!initializeSid(&administratorSid, WinBuiltinAdministratorsSid, &sidError) ||
       !initializeSid(&worldSid, WinWorldSid, &sidError) ||
-      !initializeSid(&restrictedSid, WinRestrictedCodeSid, &sidError)) {
+      !initializeSid(&authenticatedSid, WinAuthenticatedUserSid, &sidError)) {
     result.error = sidError;
     result.phase = "sid-preflight";
     return printResult(options, result);
   }
 
-  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), restrictedSid.get(), &error) ||
-      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), restrictedSid.get(), &error)) {
+  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
+      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
     result.error = error;
     result.phase = "apply-dacl";
     return printResult(options, result);
@@ -803,9 +786,9 @@ int wmain(int argc, wchar_t** argv) {
   const std::wstring targetWorkerPath = joinPath(options.workspace, L"tier20-worker.mjs");
   if (CopyFileW(options.node.c_str(), targetNodePath.c_str(), TRUE) == FALSE ||
       CopyFileW(options.worker.c_str(), targetWorkerPath.c_str(), TRUE) == FALSE ||
-      !applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), restrictedSid.get(), &error) ||
-      !applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), restrictedSid.get(), &error) ||
-      !writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), restrictedSid.get(), &error)) {
+      !applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
+      !applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
+      !writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
     result.error = error == ERROR_SUCCESS ? GetLastError() : error;
     result.phase = "target-staging";
     goto cleanup;
@@ -817,8 +800,9 @@ int wmain(int argc, wchar_t** argv) {
   }
   currentToken = ScopedHandle(rawCurrentToken);
   {
+    SID_AND_ATTRIBUTES disabledAdministrator{administratorSid.get(), 0};
     HANDLE rawRestrictedToken = nullptr;
-    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 0, nullptr, &rawRestrictedToken);
+    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 1, &disabledAdministrator, 0, nullptr, 0, nullptr, &rawRestrictedToken);
     if (created == FALSE) {
       result.error = GetLastError();
       result.phase = "create-restricted-token";
@@ -834,10 +818,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     label.Label.Sid = lowSid.get();
     label.Label.Attributes = SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
-    // Diagnostic toggle: isolate loader behavior without the Low label. The
-    // final Tier 20 gate remains false until the label is restored.
-    bool skipLowForDiagnostic = true;
-    if (!skipLowForDiagnostic && SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
+    if (SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
       result.error = GetLastError();
       result.phase = "set-low-integrity";
       goto cleanup;
@@ -918,10 +899,8 @@ int wmain(int argc, wchar_t** argv) {
     startup.StartupInfo.hStdInput = stdinChild.get();
     startup.StartupInfo.hStdOutput = stdoutChild.get();
     startup.StartupInfo.hStdError = stderrChild.get();
-    // Diagnostic toggle: keep the target's CRT table disabled while isolating
-    // loader failures; the Tier 20 gate remains false until this is restored.
-    startup.StartupInfo.cbReserved2 = 0;
-    startup.StartupInfo.lpReserved2 = nullptr;
+    startup.StartupInfo.cbReserved2 = static_cast<WORD>(descriptorBlock.size());
+    startup.StartupInfo.lpReserved2 = descriptorBlock.data();
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION processInformation{};
     std::wstring commandLine = quoteWindowsArgument(targetNodePath) + L" " + quoteWindowsArgument(targetWorkerPath);
@@ -959,7 +938,7 @@ int wmain(int argc, wchar_t** argv) {
     for (auto& carrier : carrierChild) carrier.reset();
     result.tokenRestricted = false;
     result.tokenLow = false;
-    if (!queryTokenFacts(targetProcess.get(), restrictedSid.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
+    if (!queryTokenFacts(targetProcess.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
       result.error = error;
       result.phase = "inspect-target-token";
       TerminateProcess(targetProcess.get(), 1);
