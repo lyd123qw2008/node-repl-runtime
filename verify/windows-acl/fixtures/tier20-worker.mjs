@@ -1,9 +1,8 @@
 import { spawn } from 'node:child_process'
-import { fstatSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { fstatSync, readFileSync, readSync, unlinkSync, writeFileSync, writeSync } from 'node:fs'
 import { resolve, join } from 'node:path'
-import { Socket } from 'node:net'
 
-process.stderr.write('tier20-worker:start\\n')
+process.stderr.write('tier20-worker:start\n')
 
 const CONTROL_FD = 7
 const PROTOCOL_VERSION = 1
@@ -38,19 +37,23 @@ function cleanup(path) {
 async function spawnSettlementProbe() {
   return await new Promise((resolveResult) => {
     let settled = false
-    const child = spawn(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 25)'], {
+    const child = spawn(process.execPath, ['-e', 'process.stdout.write("tier20-child-settled\\n"); setTimeout(() => process.exit(0), 25)'], {
       cwd: process.cwd(),
       env: process.env,
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
+    let stdout = ''
+    let stderr = ''
+    child.stdout?.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
+    child.stderr?.setEncoding('utf8').on('data', (chunk) => { stderr += chunk })
     const settle = (result) => {
       if (settled) return
       settled = true
       resolveResult(result)
     }
-    child.once('error', (error) => settle({ started: false, exitCode: null, error: error?.code ?? error?.message ?? String(error) }))
-    child.once('exit', (exitCode, signal) => settle({ started: true, exitCode, signal }))
+    child.once('error', (error) => settle({ started: false, exitCode: null, error: error?.code ?? error?.message ?? String(error), stdout, stderr }))
+    child.once('close', (exitCode, signal) => settle({ started: true, exitCode, signal, stdout, stderr }))
   })
 }
 
@@ -131,84 +134,91 @@ if (descriptorFailure.length > 0) {
   checks.failures.push('descriptor-inheritance')
 }
 checks.childSettlement = await spawnSettlementProbe()
-if (!checks.childSettlement.started || checks.childSettlement.exitCode !== 0 || checks.childSettlement.signal !== null) {
+if (!checks.childSettlement.started || checks.childSettlement.exitCode !== 0 || checks.childSettlement.signal !== null || checks.childSettlement.stdout !== 'tier20-child-settled\n' || checks.childSettlement.stderr !== '') {
   checks.ok = false
   checks.failures.push('child-settlement')
 }
 
-const channel = new Socket({ fd: CONTROL_FD, readable: true, writable: true })
-channel.setEncoding('utf8')
-let input = ''
-let closed = false
-
-function send(frame) {
-  if (closed) return
-  channel.write(`${JSON.stringify(frame)}\n`)
+function readExactly(fd, length) {
+  const buffer = Buffer.alloc(length)
+  let offset = 0
+  while (offset < length) {
+    const count = readSync(fd, buffer, offset, length - offset, null)
+    if (count === 0) throw new Error(`fd ${fd} reached EOF after ${offset}/${length} bytes`)
+    offset += count
+  }
+  return buffer.toString('utf8')
 }
 
-function close(code) {
-  if (closed) return
-  closed = true
-  process.exitCode = code
-  channel.end()
+const fd3Input = readExactly(3, Buffer.byteLength('fd3-in\n'))
+const fd4Input = readExactly(4, Buffer.byteLength('fd4-in\n'))
+const fd5Input = readExactly(5, Buffer.byteLength('fd5-in\n'))
+const fd6Input = readExactly(6, Buffer.byteLength('fd6-in\n'))
+const fd3RoundTrip = fd3Input === 'fd3-in\n'
+if (fd3RoundTrip) writeSync(3, 'fd3-out\n')
+checks.carriers = {
+  fd3Input,
+  fd3RoundTrip,
+  fd4Input,
+  fd5Input,
+  fd6Input,
+  carriersRead: fd4Input === 'fd4-in\n' && fd5Input === 'fd5-in\n' && fd6Input === 'fd6-in\n',
+}
+if (!checks.carriers.fd3RoundTrip || !checks.carriers.carriersRead) {
+  checks.ok = false
+  checks.failures.push('carrier-content')
 }
 
-function receive(frame) {
-  if (frame === null || typeof frame !== 'object' || Array.isArray(frame)) {
-    send({ type: 'error', code: 'INVALID_FRAME' })
-    close(64)
-    return
-  }
-  if (frame.type === 'hello') {
-    if (frame.version !== PROTOCOL_VERSION) {
-      send({ type: 'error', requestId: frame.requestId ?? null, code: 'UNSUPPORTED_VERSION' })
-      close(64)
-      return
-    }
-    send({
-      type: 'ready',
-      version: PROTOCOL_VERSION,
-      requestId: frame.requestId ?? null,
-      status: checks.ok ? 'PASS' : 'FAIL',
-      processId: process.pid,
-      nodeVersion: process.version,
-      executable: process.execPath,
-      checks,
-    })
-    return
-  }
-  if (frame.type === 'close') {
-    send({ type: 'closing', requestId: frame.requestId ?? null, status: checks.ok ? 'PASS' : 'FAIL' })
-    close(checks.ok ? 0 : 70)
-    return
-  }
-  send({ type: 'error', requestId: frame.requestId ?? null, code: 'UNKNOWN_TYPE' })
+function writeControl(frame) {
+  writeSync(CONTROL_FD, `${JSON.stringify(frame)}\n`)
 }
 
-function parseInput(chunk) {
-  input += chunk
+function readControlLine() {
+  let raw = ''
+  const byte = Buffer.alloc(1)
   for (;;) {
-    const newline = input.indexOf('\n')
-    if (newline < 0) return
-    const raw = input.slice(0, newline)
-    input = input.slice(newline + 1)
-    try {
-      receive(JSON.parse(raw))
-    } catch {
-      send({ type: 'error', code: 'INVALID_JSON' })
-      close(65)
-      return
-    }
+    const count = readSync(CONTROL_FD, byte, 0, 1, null)
+    if (count === 0) throw new Error('fd 7 control pipe reached EOF before a complete frame')
+    if (byte[0] === 0x0a) return raw
+    raw += byte.toString('utf8', 0, count)
+    if (Buffer.byteLength(raw) > 16 * 1024) throw new Error('fd 7 frame exceeded 16 KiB')
   }
 }
 
-channel.on('data', parseInput)
-channel.on('error', (error) => {
-  if (!closed) {
-    process.stderr.write(`tier20-worker: ${error?.message ?? String(error)}\n`)
-    close(74)
+try {
+  for (;;) {
+    const frame = JSON.parse(readControlLine())
+    if (frame === null || typeof frame !== 'object' || Array.isArray(frame)) {
+      writeControl({ type: 'error', code: 'INVALID_FRAME' })
+      process.exitCode = 64
+      break
+    }
+    if (frame.type === 'hello') {
+      if (frame.version !== PROTOCOL_VERSION) {
+        writeControl({ type: 'error', requestId: frame.requestId ?? null, code: 'UNSUPPORTED_VERSION' })
+        process.exitCode = 64
+        break
+      }
+      writeControl({
+        type: 'ready',
+        version: PROTOCOL_VERSION,
+        requestId: frame.requestId ?? null,
+        status: checks.ok ? 'PASS' : 'FAIL',
+        processId: process.pid,
+        nodeVersion: process.version,
+        executable: process.execPath,
+        checks,
+      })
+      continue
+    }
+    if (frame.type === 'close') {
+      writeControl({ type: 'closing', requestId: frame.requestId ?? null, status: checks.ok ? 'PASS' : 'FAIL' })
+      process.exitCode = checks.ok ? 0 : 70
+      break
+    }
+    writeControl({ type: 'error', requestId: frame.requestId ?? null, code: 'UNKNOWN_TYPE' })
   }
-})
-channel.on('end', () => {
-  if (!closed) close(checks.ok ? 0 : 70)
-})
+} catch (error) {
+  process.stderr.write(`tier20-worker: control failure: ${error?.message ?? String(error)}\n`)
+  process.exitCode = 74
+}

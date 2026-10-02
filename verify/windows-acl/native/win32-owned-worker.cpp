@@ -32,6 +32,7 @@
 #include <cstring>
 #include <cwchar>
 #include <cstdio>
+#include <initializer_list>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -121,6 +122,44 @@ class SidBuffer {
   DWORD length() const { return bytes_.empty() ? 0 : GetLengthSid(get()); }
   bool valid() const { return !bytes_.empty() && IsValidSid(get()) != FALSE; }
 
+  bool copyFrom(PSID source, DWORD* error) {
+    if (source == nullptr || IsValidSid(source) == FALSE) {
+      *error = ERROR_INVALID_SID;
+      return false;
+    }
+    const DWORD bytes = GetLengthSid(source);
+    if (bytes == 0) {
+      *error = GetLastError();
+      return false;
+    }
+    bytes_.resize(bytes);
+    if (CopySid(bytes, get(), source) == FALSE) {
+      *error = GetLastError();
+      bytes_.clear();
+      return false;
+    }
+    return true;
+  }
+
+  bool initializeCustom(std::initializer_list<DWORD> subAuthorities, DWORD* error) {
+    if (subAuthorities.size() == 0 || subAuthorities.size() > SID_MAX_SUB_AUTHORITIES) {
+      *error = ERROR_INVALID_PARAMETER;
+      return false;
+    }
+    SID_IDENTIFIER_AUTHORITY authority = {{0, 0, 0, 0, 0, 4}};
+    bytes_.resize(GetSidLengthRequired(static_cast<BYTE>(subAuthorities.size())));
+    if (InitializeSid(get(), &authority, static_cast<BYTE>(subAuthorities.size())) == FALSE) {
+      *error = GetLastError();
+      bytes_.clear();
+      return false;
+    }
+    DWORD index = 0;
+    for (DWORD value : subAuthorities) {
+      *GetSidSubAuthority(get(), index++) = value & 0x3fffffff;
+    }
+    return true;
+  }
+
  private:
   std::vector<BYTE> bytes_;
 };
@@ -141,7 +180,11 @@ struct ProbeResult {
   bool explicitEnvironmentBlock = false;
   bool handleAllowlist = false;
   bool crtDescriptorTable = false;
+  bool fd3RoundTrip = false;
+  bool carrierReads = false;
   bool jobCreated = false;
+  bool targetProcessCreated = false;
+  bool targetProcessExited = false;
   bool targetAssignedToJob = false;
   bool targetResumed = false;
   bool jobSettled = false;
@@ -149,6 +192,7 @@ struct ProbeResult {
   bool cleanup = false;
   bool targetReady = false;
   bool targetReportPass = false;
+  bool targetExitSuccess = false;
   DWORD error = ERROR_SUCCESS;
   std::string phase;
   std::string targetReadyLine;
@@ -258,6 +302,29 @@ bool initializeSid(SidBuffer* sid, WELL_KNOWN_SID_TYPE type, DWORD* error) {
   return sid->initialize(type, error);
 }
 
+bool findLogonSid(HANDLE token, SidBuffer* sid, DWORD* error) {
+  DWORD bytes = 0;
+  GetTokenInformation(token, TokenGroups, nullptr, 0, &bytes);
+  if (bytes == 0) {
+    *error = GetLastError();
+    return false;
+  }
+  std::vector<BYTE> groups(bytes);
+  if (GetTokenInformation(token, TokenGroups, groups.data(), bytes, &bytes) == FALSE) {
+    *error = GetLastError();
+    return false;
+  }
+  auto* tokenGroups = reinterpret_cast<PTOKEN_GROUPS>(groups.data());
+  for (DWORD index = 0; index < tokenGroups->GroupCount; ++index) {
+    const auto& group = tokenGroups->Groups[index];
+    if ((group.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID) {
+      return sid->copyFrom(group.Sid, error);
+    }
+  }
+  *error = ERROR_NOT_FOUND;
+  return false;
+}
+
 void setExplicitAccess(EXPLICIT_ACCESSW* access, PSID sid, DWORD permissions, ACCESS_MODE mode, DWORD inheritance) {
   ZeroMemory(access, sizeof(*access));
   access->grfAccessPermissions = permissions;
@@ -268,40 +335,83 @@ void setExplicitAccess(EXPLICIT_ACCESSW* access, PSID sid, DWORD permissions, AC
   access->Trustee.ptstrName = reinterpret_cast<LPWSTR>(sid);
 }
 
-bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID administratorSid, PSID worldSid, PSID authenticatedSid, PSID restrictedSid, DWORD* error) {
+bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID administratorSid, PSID worldSid, PSID logonSid, PSID authenticatedSid, PSID capabilitySid, PSID lowSid, DWORD* error) {
   constexpr DWORD inherited = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
-  std::array<EXPLICIT_ACCESSW, 6> entries{};
+  std::array<EXPLICIT_ACCESSW, 5> entries{};
   size_t count = 0;
   setExplicitAccess(&entries[count++], administratorSid, GENERIC_ALL, SET_ACCESS, inherited);
-  setExplicitAccess(&entries[count++], worldSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
+  setExplicitAccess(&entries[count++], worldSid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, SET_ACCESS, inherited);
+  setExplicitAccess(&entries[count++], logonSid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, SET_ACCESS, inherited);
   if (mode == L"read-only") {
-    constexpr DWORD deniedWrite = FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES |
-        FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER;
-    setExplicitAccess(&entries[count++], authenticatedSid, deniedWrite, DENY_ACCESS, inherited);
-    setExplicitAccess(&entries[count++], authenticatedSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
-    setExplicitAccess(&entries[count++], restrictedSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
+    setExplicitAccess(&entries[count++], authenticatedSid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, SET_ACCESS, inherited);
   } else {
-    constexpr DWORD writable = GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | FILE_DELETE_CHILD;
+    // Authenticated Users passes the normal-token check; the separate
+    // restricting capability SID must pass the WRITE_RESTRICTED check too.
+    constexpr DWORD writable = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
     setExplicitAccess(&entries[count++], authenticatedSid, writable, SET_ACCESS, inherited);
-    setExplicitAccess(&entries[count++], restrictedSid, writable, SET_ACCESS, inherited);
+  }
+  if (mode == L"read-only") {
+    setExplicitAccess(&entries[count++], capabilitySid, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE, SET_ACCESS, inherited);
+  } else {
+    constexpr DWORD writable = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE | FILE_DELETE_CHILD;
+    setExplicitAccess(&entries[count++], capabilitySid, writable, SET_ACCESS, inherited);
   }
 
-  LocalAcl acl;
-  DWORD result = SetEntriesInAclW(static_cast<ULONG>(count), entries.data(), nullptr, acl.out());
+  LocalAcl dacl;
+  DWORD result = SetEntriesInAclW(static_cast<ULONG>(count), entries.data(), nullptr, dacl.out());
   if (result != ERROR_SUCCESS) {
     *error = result;
+    return false;
+  }
+
+  const DWORD sidLength = GetLengthSid(lowSid);
+  const DWORD labelBytes = sizeof(ACL) + sizeof(ACE_HEADER) + sizeof(ACCESS_MASK) + sidLength;
+  std::vector<BYTE> labelStorage(labelBytes);
+  PACL label = reinterpret_cast<PACL>(labelStorage.data());
+  if (InitializeAcl(label, labelBytes, ACL_REVISION) == FALSE ||
+      AddMandatoryAce(label, ACL_REVISION, inherited, SYSTEM_MANDATORY_LABEL_NO_WRITE_UP, lowSid) == FALSE) {
+    *error = GetLastError();
     return false;
   }
   result = SetNamedSecurityInfoW(
       const_cast<LPWSTR>(path.c_str()),
       SE_FILE_OBJECT,
-      OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-      administratorSid,
+      DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
       nullptr,
-      acl.get(),
-      nullptr);
+      nullptr,
+      dacl.get(),
+      label);
   if (result != ERROR_SUCCESS) {
     *error = result;
+    return false;
+  }
+  return true;
+}
+
+bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, DWORD* error) {
+  DWORD bytes = 0;
+  GetTokenInformation(token, TokenDefaultDacl, nullptr, 0, &bytes);
+  if (bytes == 0) {
+    *error = GetLastError();
+    return false;
+  }
+  std::vector<BYTE> current(bytes);
+  if (GetTokenInformation(token, TokenDefaultDacl, current.data(), bytes, &bytes) == FALSE) {
+    *error = GetLastError();
+    return false;
+  }
+  auto* currentDacl = reinterpret_cast<PTOKEN_DEFAULT_DACL>(current.data());
+  EXPLICIT_ACCESSW entry{};
+  setExplicitAccess(&entry, grantSid, FILE_ALL_ACCESS, SET_ACCESS, 0);
+  LocalAcl merged;
+  DWORD result = SetEntriesInAclW(1, &entry, currentDacl->DefaultDacl, merged.out());
+  if (result != ERROR_SUCCESS) {
+    *error = result;
+    return false;
+  }
+  TOKEN_DEFAULT_DACL replacement{merged.get()};
+  if (SetTokenInformation(token, TokenDefaultDacl, &replacement, sizeof(replacement)) == FALSE) {
+    *error = GetLastError();
     return false;
   }
   return true;
@@ -313,7 +423,7 @@ bool restoreAclForCleanup(const std::wstring& path, DWORD* error) {
   DWORD result = SetNamedSecurityInfoW(
       const_cast<LPWSTR>(path.c_str()),
       SE_FILE_OBJECT,
-      DACL_SECURITY_INFORMATION,
+      DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION,
       nullptr,
       nullptr,
       nullptr,
@@ -715,9 +825,9 @@ int printResult(const Options& options, const ProbeResult& result) {
   std::printf(
       "{\"schemaVersion\":2,\"tool\":\"%s\",\"mode\":\"%s\",\"status\":\"%s\","
       "\"tokenRestricted\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,"
-      "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,"
-      "\"jobCreated\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
-      "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,"
+      "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
+      "\"jobCreated\":%s,\"targetProcessCreated\":%s,\"targetProcessExited\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
+      "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,\"targetExitSuccess\":%s,"
       "\"error\":%lu,\"phase\":\"%s\",\"targetExitCode\":%lu,\"targetReadyLine\":\"%s\",\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
       "node-repl-win32-owned-worker",
       jsonEscape(narrow(options.mode)).c_str(),
@@ -728,7 +838,11 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.explicitEnvironmentBlock).c_str(),
       jsonBool(result.handleAllowlist).c_str(),
       jsonBool(result.crtDescriptorTable).c_str(),
+      jsonBool(result.fd3RoundTrip).c_str(),
+      jsonBool(result.carrierReads).c_str(),
       jsonBool(result.jobCreated).c_str(),
+      jsonBool(result.targetProcessCreated).c_str(),
+      jsonBool(result.targetProcessExited).c_str(),
       jsonBool(result.targetAssignedToJob).c_str(),
       jsonBool(result.targetResumed).c_str(),
       jsonBool(result.jobSettled).c_str(),
@@ -736,6 +850,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.cleanup).c_str(),
       jsonBool(result.targetReady).c_str(),
       jsonBool(result.targetReportPass).c_str(),
+      jsonBool(result.targetExitSuccess).c_str(),
       static_cast<unsigned long>(result.error),
       jsonEscape(result.phase).c_str(),
       static_cast<unsigned long>(result.targetExitCode),
@@ -759,6 +874,13 @@ int wmain(int argc, wchar_t** argv) {
 
   ProbeResult result;
   result.phase = "initialization";
+  if (SetEnvironmentVariableW(L"NODE_REPL_PHASE0_PARENT_SENTINEL", L"must-not-reach-worker") == FALSE ||
+      SetEnvironmentVariableW(L"DSH_SUBPROCESS_CONTROL", L"must-not-reach-worker") == FALSE ||
+      SetEnvironmentVariableW(L"NODE_OPTIONS", L"--no-warnings") == FALSE) {
+    result.error = GetLastError();
+    result.phase = "prepare-environment-sentinels";
+    return printResult(options, result);
+  }
   // Hosted Windows runners do not necessarily assign every privilege to the
   // runner token. CreateProcessAsUserW may enable the privileges it needs when
   // the restricted token is used, while DACL ownership is checked at the exact
@@ -784,11 +906,14 @@ int wmain(int argc, wchar_t** argv) {
   SidBuffer administratorSid;
   SidBuffer worldSid;
   SidBuffer authenticatedSid;
-  SidBuffer restrictedSid;
+  SidBuffer logonSid;
+  SidBuffer workspaceCapabilitySid;
+  SidBuffer tempCapabilitySid;
+  SidBuffer lowSid;
+  DWORD runTag = 0;
   if (!initializeSid(&administratorSid, WinBuiltinAdministratorsSid, &sidError) ||
       !initializeSid(&worldSid, WinWorldSid, &sidError) ||
-      !initializeSid(&authenticatedSid, WinAuthenticatedUserSid, &sidError) ||
-      !initializeSid(&restrictedSid, WinRestrictedCodeSid, &sidError)) {
+      !initializeSid(&authenticatedSid, WinAuthenticatedUserSid, &sidError)) {
     result.error = sidError;
     result.phase = "sid-preflight";
     return printResult(options, result);
@@ -799,9 +924,27 @@ int wmain(int argc, wchar_t** argv) {
   const std::wstring seedPath = joinPath(options.workspace, L"tier20-seed.txt");
   const std::wstring targetNodePath = joinPath(options.workspace, L"tier20-node.exe");
   const std::wstring targetWorkerPath = joinPath(options.workspace, L"tier20-worker.mjs");
-  // Stage the executable, script, and seed before the mode DACL denies the
-  // parent runner's Authenticated Users write access. Their explicit DACLs are
-  // then protected, and the roots receive the mode ACL last.
+  if (OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, &rawCurrentToken) == FALSE) {
+    result.error = GetLastError();
+    result.phase = "open-current-token";
+    goto cleanup;
+  }
+  currentToken = ScopedHandle(rawCurrentToken);
+  if (!findLogonSid(currentToken.get(), &logonSid, &error)) {
+    result.error = error;
+    result.phase = "find-logon-sid";
+    goto cleanup;
+  }
+  runTag = static_cast<DWORD>((GetTickCount64() ^ GetCurrentProcessId()) & 0x3fffffff);
+  if (!workspaceCapabilitySid.initializeCustom({1, runTag == 0 ? 1 : runTag}, &error) ||
+      !tempCapabilitySid.initializeCustom({2, runTag == 0 ? 1 : runTag}, &error) ||
+      !initializeSid(&lowSid, WinLowLabelSid, &error)) {
+    result.error = error;
+    result.phase = "capability-sid";
+    goto cleanup;
+  }
+  // Stage the executable, script, and seed before the candidate roots receive
+  // their closed, mode-specific DACLs and Low-integrity labels.
   if (CopyFileW(options.node.c_str(), targetNodePath.c_str(), TRUE) == FALSE) {
     result.error = GetLastError();
     result.phase = "copy-node";
@@ -812,38 +955,41 @@ int wmain(int argc, wchar_t** argv) {
     result.phase = "copy-worker";
     goto cleanup;
   }
-  if (!applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
+  if (!applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), logonSid.get(), authenticatedSid.get(), worldSid.get(), lowSid.get(), &error)) {
     result.error = error;
     result.phase = "acl-node";
     goto cleanup;
   }
-  if (!applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
+  if (!applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), logonSid.get(), authenticatedSid.get(), worldSid.get(), lowSid.get(), &error)) {
     result.error = error;
     result.phase = "acl-worker";
     goto cleanup;
   }
-  if (!writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
+  if (!writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, L"read-only", administratorSid.get(), worldSid.get(), logonSid.get(), authenticatedSid.get(), worldSid.get(), lowSid.get(), &error)) {
     result.error = error == ERROR_SUCCESS ? GetLastError() : error;
     result.phase = "seed-acl";
     goto cleanup;
   }
-  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error) ||
-      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
+  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), logonSid.get(), authenticatedSid.get(), workspaceCapabilitySid.get(), lowSid.get(), &error) ||
+      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), logonSid.get(), authenticatedSid.get(), tempCapabilitySid.get(), lowSid.get(), &error)) {
     result.error = error;
     result.phase = "apply-dacl";
     goto cleanup;
   }
   result.daclApplied = true;
-  if (OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, &rawCurrentToken) == FALSE) {
-    result.error = GetLastError();
-    result.phase = "open-current-token";
-    goto cleanup;
-  }
-  currentToken = ScopedHandle(rawCurrentToken);
   {
-    SID_AND_ATTRIBUTES restrictedAttribute{restrictedSid.get(), 0};
+    std::array<SID_AND_ATTRIBUTES, 4> restrictingAttributes{};
+    restrictingAttributes[0] = SID_AND_ATTRIBUTES{logonSid.get(), 0};
+    restrictingAttributes[1] = SID_AND_ATTRIBUTES{worldSid.get(), 0};
+    DWORD restrictingCount = 2;
+    if (options.mode == L"workspace-write") {
+      restrictingAttributes[2] = SID_AND_ATTRIBUTES{workspaceCapabilitySid.get(), 0};
+      restrictingAttributes[3] = SID_AND_ATTRIBUTES{tempCapabilitySid.get(), 0};
+      restrictingCount = 4;
+    }
     HANDLE rawRestrictedToken = nullptr;
-    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 1, &restrictedAttribute, &rawRestrictedToken);
+    constexpr DWORD restrictedFlags = DISABLE_MAX_PRIVILEGE | 0x00000004 /* LUA_TOKEN */ | 0x00000008 /* WRITE_RESTRICTED */;
+    BOOL created = CreateRestrictedToken(currentToken.get(), restrictedFlags, 0, nullptr, 0, nullptr, restrictingCount, restrictingAttributes.data(), &rawRestrictedToken);
     if (created == FALSE) {
       result.error = GetLastError();
       result.phase = "create-restricted-token";
@@ -851,17 +997,17 @@ int wmain(int argc, wchar_t** argv) {
     }
     ScopedHandle restrictedToken(rawRestrictedToken);
     TOKEN_MANDATORY_LABEL label{};
-    SidBuffer lowSid;
-    if (!initializeSid(&lowSid, WinLowLabelSid, &error)) {
-      result.error = error;
-      result.phase = "low-sid";
-      goto cleanup;
-    }
     label.Label.Sid = lowSid.get();
     label.Label.Attributes = SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
     if (SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
       result.error = GetLastError();
       result.phase = "set-low-integrity";
+      goto cleanup;
+    }
+    PSID defaultDaclCapability = options.mode == L"workspace-write" ? tempCapabilitySid.get() : worldSid.get();
+    if (!setTokenDefaultDaclGrant(restrictedToken.get(), defaultDaclCapability, &error)) {
+      result.error = error;
+      result.phase = "set-default-dacl";
       goto cleanup;
     }
 
@@ -966,6 +1112,7 @@ int wmain(int argc, wchar_t** argv) {
       result.phase = "create-restricted-node";
       goto cleanup;
     }
+    result.targetProcessCreated = true;
     ScopedHandle targetProcess(processInformation.hProcess);
     ScopedHandle targetThread(processInformation.hThread);
     // Close the parent's copies of every child-side handle immediately after
@@ -979,11 +1126,11 @@ int wmain(int argc, wchar_t** argv) {
     for (auto& carrier : carrierChild) carrier.reset();
     result.tokenRestricted = false;
     result.tokenLow = false;
-    if (!queryTokenFacts(targetProcess.get(), restrictedSid.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
+    if (!queryTokenFacts(targetProcess.get(), logonSid.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
       result.error = error;
       result.phase = "inspect-target-token";
       TerminateProcess(targetProcess.get(), 1);
-      WaitForSingleObject(targetProcess.get(), kExitTimeoutMs);
+      result.targetProcessExited = WaitForSingleObject(targetProcess.get(), kExitTimeoutMs) == WAIT_OBJECT_0;
       goto cleanup;
     }
 
@@ -992,7 +1139,7 @@ int wmain(int argc, wchar_t** argv) {
       result.error = GetLastError();
       result.phase = "create-job";
       TerminateProcess(targetProcess.get(), 1);
-      WaitForSingleObject(targetProcess.get(), kExitTimeoutMs);
+      result.targetProcessExited = WaitForSingleObject(targetProcess.get(), kExitTimeoutMs) == WAIT_OBJECT_0;
       goto cleanup;
     }
     result.jobCreated = true;
@@ -1003,15 +1150,29 @@ int wmain(int argc, wchar_t** argv) {
       result.error = GetLastError();
       result.phase = "assign-job";
       TerminateProcess(targetProcess.get(), 1);
-      WaitForSingleObject(targetProcess.get(), kExitTimeoutMs);
+      result.targetProcessExited = WaitForSingleObject(targetProcess.get(), kExitTimeoutMs) == WAIT_OBJECT_0;
       goto cleanup;
     }
     result.targetAssignedToJob = true;
+    if (!writeAll(fd3.parent.get(), "fd3-in\n", &error) ||
+        !writeAll(carrierParent[0].get(), "fd4-in\n", &error) ||
+        !writeAll(carrierParent[1].get(), "fd5-in\n", &error) ||
+        !writeAll(carrierParent[2].get(), "fd6-in\n", &error)) {
+      result.error = error;
+      result.phase = "seed-worker-carriers";
+      TerminateJobObject(job.get(), 1);
+      result.targetProcessExited = WaitForSingleObject(targetProcess.get(), kExitTimeoutMs) == WAIT_OBJECT_0;
+      bool settledAfterTermination = false;
+      if (queryJobSettled(job.get(), &settledAfterTermination, &error)) result.jobSettled = settledAfterTermination;
+      goto cleanup;
+    }
     if (ResumeThread(targetThread.get()) == static_cast<DWORD>(-1)) {
       result.error = GetLastError();
       result.phase = "resume-target";
       TerminateJobObject(job.get(), 1);
-      WaitForSingleObject(targetProcess.get(), kExitTimeoutMs);
+      result.targetProcessExited = WaitForSingleObject(targetProcess.get(), kExitTimeoutMs) == WAIT_OBJECT_0;
+      bool settledAfterTermination = false;
+      if (queryJobSettled(job.get(), &settledAfterTermination, &error)) result.jobSettled = settledAfterTermination;
       goto cleanup;
     }
     result.targetResumed = true;
@@ -1045,7 +1206,16 @@ int wmain(int argc, wchar_t** argv) {
           readyLine.find("\"fd\":5,\"valid\":true") != std::string::npos &&
           readyLine.find("\"fd\":6,\"valid\":true") != std::string::npos &&
           readyLine.find("\"fd\":7,\"valid\":true") != std::string::npos;
+      result.carrierReads = readyLine.find("\"carriersRead\":true") != std::string::npos;
       result.targetReadyLine = readyLine;
+      std::string fd3Reply;
+      if (readLine(fd3.parent.get(), &fd3Reply, kReadyTimeoutMs, &lineError)) {
+        result.fd3RoundTrip = fd3Reply == "fd3-out";
+      } else {
+        result.error = lineError;
+        result.phase = "fd3-round-trip";
+        TerminateJobObject(job.get(), 1);
+      }
       const std::string close = "{\"type\":\"close\",\"requestId\":\"tier20-close\"}\n";
       if (!writeAll(fd7.parent.get(), close, &lineError)) {
         result.error = lineError;
@@ -1053,15 +1223,16 @@ int wmain(int argc, wchar_t** argv) {
         TerminateJobObject(job.get(), 1);
       } else {
         std::string closingLine;
-        if (!readLine(fd7.parent.get(), &closingLine, kReadyTimeoutMs, &lineError)) {
-          result.error = lineError;
+        if (!readLine(fd7.parent.get(), &closingLine, kReadyTimeoutMs, &lineError) ||
+            closingLine.find("\"type\":\"closing\"") == std::string::npos ||
+            closingLine.find("\"status\":\"PASS\"") == std::string::npos) {
+          result.error = lineError == ERROR_SUCCESS ? ERROR_INVALID_DATA : lineError;
           result.phase = "read-close";
           TerminateJobObject(job.get(), 1);
         }
       }
-      // The target's Socket.end() closes only its write half. Close the host
-      // endpoint after the acknowledged closing frame so the target observes
-      // the final read-side EOF and can exit.
+      // Close the host endpoint after the acknowledged closing frame; this
+      // keeps the final pipe lifetime explicit for Job settlement.
       fd7.parent.reset();
     } else {
       result.error = lineError;
@@ -1070,13 +1241,19 @@ int wmain(int argc, wchar_t** argv) {
     }
 
     const DWORD wait = WaitForSingleObject(targetProcess.get(), kExitTimeoutMs);
+    result.targetProcessExited = wait == WAIT_OBJECT_0;
     if (wait != WAIT_OBJECT_0) {
       result.error = wait == WAIT_FAILED ? GetLastError() : WAIT_TIMEOUT;
       result.phase = "target-exit";
       TerminateJobObject(job.get(), 1);
-      WaitForSingleObject(targetProcess.get(), kExitTimeoutMs);
+      result.targetProcessExited = WaitForSingleObject(targetProcess.get(), kExitTimeoutMs) == WAIT_OBJECT_0;
     }
-    GetExitCodeProcess(targetProcess.get(), &result.targetExitCode);
+    if (GetExitCodeProcess(targetProcess.get(), &result.targetExitCode) == FALSE) {
+      result.error = GetLastError();
+      result.phase = "inspect-target-exit-code";
+    } else {
+      result.targetExitSuccess = result.targetExitCode == 0;
+    }
     result.jobSettled = queryJobSettled(job.get(), &result.jobSettled, &error) && result.jobSettled;
     if (!result.jobSettled && result.error == ERROR_SUCCESS) {
       result.error = error;
@@ -1088,7 +1265,6 @@ int wmain(int argc, wchar_t** argv) {
     result.childStderr = stderrDrain.output;
     stdoutDrain.handle.reset();
     stderrDrain.handle.reset();
-    result.grantsRevokedAfterQuiescence = result.jobSettled;
     result.cleanup = false;
     targetProcess.reset();
     job.reset();
@@ -1097,23 +1273,38 @@ int wmain(int argc, wchar_t** argv) {
 cleanup:
   {
     DWORD cleanupError = ERROR_SUCCESS;
-    bool cleanedWorkspace = restoreAclForCleanup(options.workspace, &cleanupError);
-    bool cleanedTemp = restoreAclForCleanup(options.privateTemp, &cleanupError);
-    DeleteFileW(seedPath.c_str());
-    DeleteFileW(targetNodePath.c_str());
-    DeleteFileW(targetWorkerPath.c_str());
-    bool removedSeed = GetFileAttributesW(seedPath.c_str()) == INVALID_FILE_ATTRIBUTES;
-    bool removedWorkspace = RemoveDirectoryW(options.workspace.c_str()) != FALSE;
-    bool removedTemp = RemoveDirectoryW(options.privateTemp.c_str()) != FALSE;
-    result.cleanup = cleanedWorkspace && cleanedTemp && removedSeed && removedWorkspace && removedTemp;
+    const bool quiescent = (!result.targetProcessCreated || result.targetProcessExited) &&
+        (!result.targetAssignedToJob || result.jobSettled);
+    if (quiescent) {
+      auto restoreIfPresent = [&](const std::wstring& path) {
+        if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return true;
+        return restoreAclForCleanup(path, &cleanupError);
+      };
+      bool cleanedSeedAcl = restoreIfPresent(seedPath);
+      bool cleanedNodeAcl = restoreIfPresent(targetNodePath);
+      bool cleanedWorkerAcl = restoreIfPresent(targetWorkerPath);
+      bool cleanedWorkspace = restoreIfPresent(options.workspace);
+      bool cleanedTemp = restoreIfPresent(options.privateTemp);
+      DeleteFileW(seedPath.c_str());
+      DeleteFileW(targetNodePath.c_str());
+      DeleteFileW(targetWorkerPath.c_str());
+      bool removedSeed = GetFileAttributesW(seedPath.c_str()) == INVALID_FILE_ATTRIBUTES;
+      bool removedNode = GetFileAttributesW(targetNodePath.c_str()) == INVALID_FILE_ATTRIBUTES;
+      bool removedWorker = GetFileAttributesW(targetWorkerPath.c_str()) == INVALID_FILE_ATTRIBUTES;
+      bool removedWorkspace = RemoveDirectoryW(options.workspace.c_str()) != FALSE;
+      bool removedTemp = RemoveDirectoryW(options.privateTemp.c_str()) != FALSE;
+      result.cleanup = cleanedSeedAcl && cleanedNodeAcl && cleanedWorkerAcl && cleanedWorkspace && cleanedTemp &&
+          removedSeed && removedNode && removedWorker && removedWorkspace && removedTemp;
+    }
+    result.grantsRevokedAfterQuiescence = result.cleanup && quiescent;
     if (!result.cleanup && result.error == ERROR_SUCCESS) {
       result.error = cleanupError == ERROR_SUCCESS ? GetLastError() : cleanupError;
-      result.phase = "cleanup";
+      result.phase = quiescent ? "cleanup" : "cleanup-before-quiescence";
     }
   }
   result.pass = result.daclApplied && result.tokenRestricted && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist &&
-      result.crtDescriptorTable && result.jobCreated && result.targetAssignedToJob && result.targetResumed && result.jobSettled &&
-      result.grantsRevokedAfterQuiescence && result.cleanup && result.targetReady && result.targetReportPass;
+      result.crtDescriptorTable && result.fd3RoundTrip && result.carrierReads && result.jobCreated && result.targetAssignedToJob && result.targetResumed && result.jobSettled &&
+      result.grantsRevokedAfterQuiescence && result.cleanup && result.targetReady && result.targetReportPass && result.targetExitSuccess;
   if (result.pass) result.phase = "complete";
   return printResult(options, result);
 }
