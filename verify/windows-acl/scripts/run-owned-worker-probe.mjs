@@ -138,5 +138,10 @@ const artifact = {
   observations,
 }
 await writeFile(join(evidenceRoot, 'evidence.json'), `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
-process.stdout.write(`${JSON.stringify({ status: artifact.status, evidencePath: join(evidenceRoot, 'evidence.json'), modes: observations.map(({ mode, status }) => ({ mode, status })) }, null, 2)}\n`)
+process.stdout.write(`${JSON.stringify({
+  status: artifact.status,
+  evidencePath: join(evidenceRoot, 'evidence.json'),
+  modes: observations.map(({ mode, status }) => ({ mode, status })),
+  details: observations.map(({ mode, status, native, failure }) => ({ mode, status, native, failure })),
+}, null, 2)}\n`)
 if (!passed) process.exitCode = 2

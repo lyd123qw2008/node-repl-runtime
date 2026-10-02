@@ -140,18 +140,26 @@ jobs:
           $env:NODE_REPL_VERIFY_OUT = $tier20Evidence
           $env:NODE_REPL_VERIFY_NODE = (Get-Command node.exe).Source
           & node (Join-Path $env:GITHUB_WORKSPACE 'verify\windows-acl\scripts\run-owned-worker-probe.mjs')
-          if ($LASTEXITCODE -ne 0) {
-            throw "Tier 20 owned-worker probe failed with exit code $LASTEXITCODE"
+          $probeExit = $LASTEXITCODE
+          $evidencePath = Join-Path $tier20Evidence '20-owned-restricted-token-job\evidence.json'
+          if (Test-Path -LiteralPath $evidencePath -PathType Leaf) {
+            Get-Content -LiteralPath $evidencePath -Raw
           }
           $tier20Artifact = Join-Path $env:GITHUB_WORKSPACE 'tier20-owned-worker-artifact'
           New-Item -ItemType Directory -Force -Path $tier20Artifact | Out-Null
           Copy-Item -LiteralPath $output -Destination (Join-Path $tier20Artifact 'node-repl-win32-owned-worker.exe') -Force
-          Copy-Item -LiteralPath (Join-Path $tier20Evidence '20-owned-restricted-token-job\evidence.json') -Destination (Join-Path $tier20Artifact 'evidence.json') -Force
+          if (Test-Path -LiteralPath $evidencePath -PathType Leaf) {
+            Copy-Item -LiteralPath $evidencePath -Destination (Join-Path $tier20Artifact 'evidence.json') -Force
+          }
+          if ($probeExit -ne 0) {
+            throw "Tier 20 owned-worker probe failed with exit code $probeExit"
+          }
 
       - name: Upload Tier 20 owned-worker evidence
+        if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: windows-acl-tier20-owned-worker-${{ github.sha }}
           path: tier20-owned-worker-artifact
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
