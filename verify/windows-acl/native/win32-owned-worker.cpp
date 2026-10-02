@@ -784,13 +784,29 @@ int wmain(int argc, wchar_t** argv) {
   const std::wstring seedPath = joinPath(options.workspace, L"tier20-seed.txt");
   const std::wstring targetNodePath = joinPath(options.workspace, L"tier20-node.exe");
   const std::wstring targetWorkerPath = joinPath(options.workspace, L"tier20-worker.mjs");
-  if (CopyFileW(options.node.c_str(), targetNodePath.c_str(), TRUE) == FALSE ||
-      CopyFileW(options.worker.c_str(), targetWorkerPath.c_str(), TRUE) == FALSE ||
-      !applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
-      !applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
-      !writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+  if (CopyFileW(options.node.c_str(), targetNodePath.c_str(), TRUE) == FALSE) {
+    result.error = GetLastError();
+    result.phase = "copy-node";
+    goto cleanup;
+  }
+  if (CopyFileW(options.worker.c_str(), targetWorkerPath.c_str(), TRUE) == FALSE) {
+    result.error = GetLastError();
+    result.phase = "copy-worker";
+    goto cleanup;
+  }
+  if (!applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+    result.error = error;
+    result.phase = "acl-node";
+    goto cleanup;
+  }
+  if (!applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+    result.error = error;
+    result.phase = "acl-worker";
+    goto cleanup;
+  }
+  if (!writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
     result.error = error == ERROR_SUCCESS ? GetLastError() : error;
-    result.phase = "target-staging";
+    result.phase = "seed-acl";
     goto cleanup;
   }
   if (OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, &rawCurrentToken) == FALSE) {
