@@ -40,14 +40,22 @@ and hashes; all evidence records remain `releaseEligible: false`.
 
 ## Tier 10 reference source (executed externally, never imported)
 
-The optional Tier 10 runner invokes only the fixed source test below through a
-caller-supplied clean DSH checkout. It imports no DSH package and records a
-reference-only result:
+The optional Tier 10 reference tools execute against caller-supplied DSH source;
+node-repl-runtime imports no DSH package and records reference-only results:
 
 - `packages/sandbox/sandbox-windows-acl/tests/control.spec.ts` — nested DSH
   runner/ACL-control reference. It checks final restricted payload marker
   consumption, denied filesystem write, normal stdout/stderr capture, and 256 KiB
   binary fd 7 echo.
+- `fixtures/inspect-token-default-dacl.mjs` and `scripts/run-dsh-token-snapshot.mjs`
+  — use the isolated `koffi@3.1.1` verifier dependency to query the actual final
+  DSH child token's restricted SIDs, Low integrity, ordered default-DACL ACE
+  trustee classes/masks/flags, TMP/TEMP facts, and child-stdio outcomes. The
+  wrapper pins DSH revision `f9d6609d182969c9f57499ef552edb78835cc4e4`, requires
+  the enumerated ACL/token/runner/test source files to be clean, and records their
+  SHA-256 hashes. Raw evidence is written only outside Git.
+- `evidence/DSH-COMPARISON.md` — interpretation and source/topology differences;
+  it does not identify an unproven root cause or endorse the probe World ACE.
 
 ## Tier 20 own-source feasibility probe (non-production; not a runtime package)
 
@@ -57,18 +65,23 @@ read-only and workspace-write under Node `v22.23.3`
 ([37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908));
 the expanded fd 0–7 / outside-path / exact token-SID / protected-DACL / mask / Low-label /
 pipe-type matrix passed under the minimum Node `v22.19.0`
-([37022202477](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37022202477)).
+([37022202477](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37022202477));
+ordered TokenDefaultDacl ACE class/mask/flags were added to the expanded minimum-floor matrix
+in [37029476316](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37029476316).
 Earlier minimum-floor runs are [37018555957](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37018555957),
 [37016397591](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37016397591), and
 [37015202534](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37015202534).
 This is `OWNED_WORKER_PROBE_PASS` for the **probe only**, not formal Tier 20 acceptance;
-`releaseEligible=false` and overall Phase 0 remains incomplete. Workspace-write requires
-both the temp capability and an additional World `FILE_ALL_ACCESS` default-DACL ACE on
-the tested runner; stdout/stderr/dual-piped cell-owned child spawns still return `EPERM`.
-The final inspector confirms DACL protection, exact grant masks, World write/delete
-absence and cross-capability SID exclusion; all fd 0–7 are valid, external sibling-root
-file creation/deletion are denied, and the pre-created outside sentinel remains readable.
-These facts and all non-claims are in
+`releaseEligible=false` and overall Phase 0 remains incomplete. The probe's workspace-write
+default DACL has a test-only World full-access ACE and non-inheritable ACE flags, unlike
+the pinned DSH runner's measured inheritable temp-only ACE on local Node `v24.15.0`; no
+production ACL fix is inferred from this difference. Cell-owned piped stdio remains a
+DSH-documented unsupported v1 boundary, not a Phase 0 blocker. The final inspector
+confirms DACL protection, exact grant masks, World write/delete absence and cross-capability
+SID exclusion; all fd 0–7 are valid, external sibling-root file creation/deletion are
+denied, and the pre-created outside sentinel remains readable. The actual DSH token
+snapshot, source pins, and topology comparison are in
+[evidence/DSH-COMPARISON.md](evidence/DSH-COMPARISON.md); all probe facts and non-claims are in
 [native/README.md](native/README.md) and [evidence/RESULTS.md](evidence/RESULTS.md).
 
 ## Future upstream source inventory (not imported into the runtime)

@@ -8,12 +8,12 @@ Windows ACL confinement is available in node-repl-runtime.
 
 | Tier | Command / source | Result | Allowed conclusion |
 | --- | --- | --- | --- |
-| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl test` | **PASS**: 7 transport/launch cases plus 11 Tier 10 preflight/reference fail-closed, ABI, or boundary cases and 1 Tier 20 fail-closed contract (19 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
+| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl test` | **PASS**: 7 transport/launch cases plus 12 Tier 10 preflight/reference fail-closed, ABI, or boundary cases and 1 Tier 20 fail-closed contract (20 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
 | `00-unconfined-node-fd7` evidence | `node scripts/run-unconfined-fd7.mjs` with an external `NODE_REPL_VERIFY_OUT` | **REFERENCE_PASS** | Node v24.15.0 x64 used real `node.exe`; the host-first version-1 handshake, marker consumption, state/reset, bounded output, and normal direct-child exit were observed. |
 | `10-dsh-source-baseline` | pinned DSH `f9d6609d182969c9f57499ef552edb78835cc4e4`, `sandbox-windows-acl/tests/control.spec.ts` | **REFERENCE_PASS**: 3 tests | The external DSH nested runner reference can reach a final restricted Node payload with captured stdout/stderr and fd 7 binary control. It remains an external oracle only. |
 | `10-ci-native-audit-artifact` | GitHub Actions run [`36996109769`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36996109769), then local hash/manifest/mode verification | **NATIVE_AUDIT_PASS**, reference-only | CI MSVC/Windows SDK independently compiled and self-tested ABI, OS handle-list sentinel, and bounded Job-zero-active accounting facts; no token/ACL/Node launcher support follows. |
 | `10-native-abi-and-koffi-preflight` | `node scripts/run-native-preflight.mjs` | **UNSUPPORTED**, expected exit `2`; exact isolated Koffi x64 ABI/loadability sub-check passed | The owned Windows required path is fail-closed; a Koffi binding preflight is not token/ACL/Job evidence and no raw-Node fallback is authorized. |
-| `20-owned-restricted-token-job` | GitHub Actions run [`37022202477`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37022202477) (`v22.19.0`, exact SID/DACL/Low/pipe inspectors plus fd 0–7 and outside-path matrix), earlier `v22.23.3` core run [`37014751908`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | **OWNED_WORKER_PROBE_PASS (not formal Tier 20 acceptance)**, both `read-only` and `workspace-write`; artifact reports `releaseEligible=false`, `confinement=enforcement=partial` | Proves only the enumerated fixture facts; it is not Phase 0 overall acceptance or a runtime backend. External sibling-root write/delete are denied, and protected DACL masks/cross-capability exclusion are queried. The workspace-write default DACL requires both temp-capability and World full-access ACEs; piped child stdio remains `EPERM`. |
+| `20-owned-restricted-token-job` | GitHub Actions run [`37029476316`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37029476316) (`v22.19.0`, exact SID/DACL/Low/pipe inspectors, ordered TokenDefaultDacl ACE snapshots, fd 0–7 and outside-path matrix); earlier `v22.23.3` core run [`37014751908`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | **OWNED_WORKER_PROBE_PASS (not formal Tier 20 acceptance)**, both `read-only` and `workspace-write`; artifact reports `releaseEligible=false`, `confinement=enforcement=partial` | Proves only the enumerated fixture facts; it is not Phase 0 overall acceptance or a runtime backend. External sibling-root write/delete are denied, and protected DACL masks/cross-capability exclusion plus default-DACL ACE order/masks/flags are queried. The probe write-mode TokenDefaultDacl still has a probe-only World ACE that diverges from the measured DSH runner. Cell-owned piped child stdio is a DSH-documented unsupported boundary, not a Phase 0 blocker. |
 | Existing runtime regression | root `pnpm test` | **PASS**: 59 runtime, 15 adapter, 9 bootstrap tests | The isolated `verify/` addition did not alter the existing workspace build/test result. |
 
 Raw JSON observations are machine-local and intentionally ignored. They are
@@ -65,6 +65,34 @@ It does **not** prove an owned direct final-worker process/Job, own explicit
 restricted-job quiescence before temporary grant revocation. These missing facts
 are not waived by a reference pass.
 
+### Pinned DSH token/default-DACL comparison
+
+The added `run-dsh-token-snapshot.mjs` reference launched the exact pinned DSH ACL runner
+on local Windows x64 / Node `v24.15.0` in both modes, then queried the actual final token's
+restricting-SID set, Low integrity, and ordered `TokenDefaultDacl` ACEs. Source/test files
+used by the experiment were individually clean at DSH revision
+`f9d6609d182969c9f57499ef552edb78835cc4e4`; unrelated paths in that checkout were dirty,
+so their hashes are recorded and the checkout is not described as wholly clean.
+
+Observed DSH default-DACL ACE at index 0: read-only grants World `FILE_ALL_ACCESS`
+(`0x001f01ff`); workspace-write grants the private-temp capability the same mask and has
+no extra World full-access ACE. Both DSH ACEs have inheritance flags `0x03` (object +
+container). The same DSH target reports `[logon, World]` in read-only and adds workspace /
+temp capability SIDs in workspace-write, with Low RID 4096. In write mode its `TMP` and
+`TEMP` point beneath the provided temp root; in read-only they do not. DSH's pinned
+`runner.spec.ts` and `control.spec.ts` also passed locally (19 and 3 tests respectively),
+including host-side output capture/fd 7 and the documented grandchild `pipe: EPERM`.
+
+The exact probe `TokenDefaultDacl` ACE lists are now included in CI evidence
+[`37029476316`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37029476316):
+its read-only index 0 is World/full with flags 0; workspace-write index 0 is
+Temp-capability/full with flags 0 and index 1 is World/full with flags 0. Therefore the
+probe remains different from the DSH source in default-DACL trustee set/order, inheritance
+flags, environment construction, launch path, and Node/runner context. Local DSH success at Node `v24.15.0`
+does not identify why the earlier hosted Node `v22.19.0` probe required its extra World
+ACE. No replacement ACL recipe is inferred; see
+[DSH-COMPARISON.md](DSH-COMPARISON.md) for the exact source and test matrix.
+
 ## CI-built native audit reference
 
 To avoid installing MSVC Build Tools or a Windows SDK locally, the public narrow
@@ -107,7 +135,7 @@ and overall Phase 0 remain **unsupported / not accepted**:
 | Backend / mode | Status | Remaining required facts |
 | --- | --- | --- |
 | Windows ACL / read-only | **unsupported** | final installed/packed engine and supervisor integration; full versioned worker/runner protocol and crash/EOF/terminate/reset matrix; final product preflight, concurrent-owner/broker and bridge-lifecycle gates; document/validate all partial boundaries |
-| Windows ACL / workspace-write | **unsupported** | all read-only gaps plus production-acceptable default-object ACL (current probe needs an added World `FILE_ALL_ACCESS` default ACE), standing workspace grant/recovery/revocation semantics, and complete capability-SID negative regression |
+| Windows ACL / workspace-write | **unsupported** | all read-only gaps plus source-aligned TokenDefaultDacl / final launch semantics (the probe-only World ACE and flags-0 ACEs diverge from the measured DSH temp-capability inheritable ACE; run a controlled same-Node/same-runner differential before deciding what to migrate), standing workspace grant/recovery/revocation semantics, and complete capability-SID negative regression |
 
 The Tier 20 artifact itself is **not** a Windows ACL backend or formal Tier 20 acceptance.
 It is a throw-away native/Node feasibility fixture, with `confinement=enforcement=partial`
@@ -120,12 +148,15 @@ write/delete denials, Job assignment/settlement, and cleanup after quiescence. O
 `stdio: 'ignore'` child creation settles; stdout-only, stderr-only, and dual-piped child
 stdio return `EPERM`.
 
-The hosted Windows 2022 diagnostic isolated the write-mode loader failure: a token
-default DACL with only the private temp capability ACE caused Node `0xC0000142`; the
-passing variant retains that private-temp grant **and** adds a World `FILE_ALL_ACCESS`
-ACE. That broad default-object grant is an important partial boundary requiring
-security review/narrowing before production adoption; it is not process/object
-visibility isolation and does not enable `sandboxHost: 'required'`.
+An earlier hosted Windows 2022 / Node `v22.19.0` probe matrix observed Node `0xC0000142`
+with a TokenDefaultDacl that only added the private-temp capability. A passing variant
+added World `FILE_ALL_ACCESS`. This was only correlation in a different launch/runtime
+context; the current pinned DSH workspace-write final token uses an inheritable temp-only
+full-access ACE on local Node `v24.15.0`. The DSH-aligned same-Node/same-host differential
+is still required before naming a cause or choosing a replacement. Treat the probe World
+ACE as an unresolved test-only divergence—not a production candidate—and do not infer
+that the failure is an access to a specific object. This evidence does not enable
+`sandboxHost: 'required'`.
 
 The first queried DACL run also found capability ACE inheritance on staged files. The
 final fixture applies `PROTECTED_DACL_SECURITY_INFORMATION` to roots and staged files,

@@ -14,6 +14,7 @@ const DSH_FILES = [
   'packages/sandbox/sandbox-windows-acl/src/runner.ts',
   'packages/sandbox/sandbox-windows-acl/src/spawn.ts',
   'packages/sandbox/sandbox-windows-acl/tests/runner.spec.ts',
+  'packages/sandbox/sandbox-windows-acl/tests/control.spec.ts',
   'packages/subprocess/win32-process/src/process.ts',
   'packages/subprocess/win32-process/src/control-stdio.ts',
   'packages/subprocess/subprocess-local/src/runner-protocol.ts',

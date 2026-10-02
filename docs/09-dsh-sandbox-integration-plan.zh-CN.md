@@ -747,7 +747,7 @@ caller 指定的忽略路径或短期 CI artifact，tracked 包含自有 probe/f
 | `10-dsh-source-baseline` | `REFERENCE_PASS` | 在固定且 clean 的 DSH source revision 上，外部 DSH nested runner reference test 通过 final restricted Node 的 denied write、普通 output capture 与 256 KiB fd 7 binary echo。 | **不是 owned implementation。** 无 own final Job、own explicit restricted env、native handle allowlist 或 final target quiescence-before-revoke 证明。 |
 | `10-ci-native-audit-artifact` | `NATIVE_AUDIT_PASS`（GitHub Actions Windows MSVC 构建后，本机 hash/manifest/mode 二次验证） | 独立 native probe 已实测 narrow Windows-header ABI、`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` omitted-sentinel、以及 suspended-create → Job assign → resume → bounded zero-active accounting。 | **不是 sandbox。** 不创建 restricted token/ACL/Low，不启动 Node，不证明 final target fd 3–7、显式 environment 或 grant-revoke safety。 |
 | `10-native-abi-and-koffi-preflight` | `UNSUPPORTED` / expected exit `2`；exact isolated `koffi@3.1.1` x64 ABI/loadability sub-check 为 `PASS` | required path 按 fail-closed 处理；已确认 selected Win32 exports 可 bind 且 static x64 record layouts 相符，但不允许 fallback 到 raw Node。 | 不调用 token/ACL/Job/child API，因此不能把 ABI pass 或 Node/DSH reference pass 晋升为 Windows ACL support。 |
-| `20-owned-restricted-token-job` (本仓库外 non-production owned-worker probe) | `OWNED_WORKER_PROBE_PASS`（不是 formal Tier 20 acceptance）于 Node `v22.19.0`；[expanded inspector run 37022202477](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37022202477)、[earlier `v22.23.3` core run 37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | read-only / workspace-write 的 restricted token + exact SID set、Low label、protected DACL / queried ACE masks / cross-capability exclusion、SACL、explicit env、OS handle allowlist/sentinel、fd 3–7 table + fd3/4–6 traffic + pipe-type query、suspended→Job→resume、实际 Node、workspace/private-temp-only 写入及外部路径 write/delete denial、普通 child settlement、Job quiescence 后 cleanup 均在 probe 中有实测。 | 只代表这个 fixture / owned-worker feasibility probe 通过，不是 formal Tier 20 或 Phase 0 整体验收；workspace-write 的 token default DACL 必须保留 temp capability 和额外 `World FILE_ALL_ACCESS` ACE（temp-only 曾导致 Node `0xC0000142`）；child piped stdio 仍返回 `EPERM`；没有 final packaged engine、完整 protocol/runner failure、broker 并发隔离、DSH bridge lifecycle 和全部 preflight/negative regressions 的证据。`releaseEligible=false`，仍禁止 `sandboxHost: 'required'`。 |
+| `20-owned-restricted-token-job` (本仓库外 non-production owned-worker probe) | `OWNED_WORKER_PROBE_PASS`（不是 formal Tier 20 acceptance）于 Node `v22.19.0`；[expanded ACE-order inspector run 37029476316](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37029476316)、[earlier `v22.23.3` core run 37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | read-only / workspace-write 的 restricted token + exact SID set、Low label、protected DACL / queried ACE masks / cross-capability exclusion、SACL、ordered TokenDefaultDacl ACE type/flags/masks/trustee classes、explicit env、OS handle allowlist/sentinel、fd 3–7 table + fd3/4–6 traffic + pipe-type query、suspended→Job→resume、实际 Node、workspace/private-temp-only 写入及外部路径 write/delete denial、普通 child settlement、Job quiescence 后 cleanup 均在 probe 中有实测。Pinned DSH token/default-DACL 实测比较见 [DSH-COMPARISON.md](../verify/windows-acl/evidence/DSH-COMPARISON.md)。 | 只代表这个 fixture / owned-worker feasibility probe 通过，不是 formal Tier 20 或 Phase 0 整体验收；probe 的 workspace-write World default ACE / flags 0 与 DSH measured temp-only inheritable ACE / flags `0x03` 及其 environment/launch topology 不同，尚未用 same-Node/same-runner matrix 定因，World ACE 不得迁为产品方案；piped child stdio 是 DSH 已记录的 unsupported v1 capability，不是 Phase 0 blocker；没有 final packaged engine、完整 protocol/runner failure、broker 并发隔离、DSH bridge lifecycle 和全部 preflight/negative regressions 的证据。`releaseEligible=false`，仍禁止 `sandboxHost: 'required'`。 |
 
 本机 C++ compiler 不再是阻塞项；独立 native header/handle-list/Job-accounting audit 及 Tier 20 owned-worker
 fixture 均由固定 Windows Server 2022 CI 构建/执行。expanded owned-worker probe 在 Node `v22.19.0` 上通过
@@ -758,12 +758,22 @@ ordinary child Job settlement 和 quiescence 后 cleanup。DACL inspector 首次
 对 roots 与 staged files 明确设置并查询 `SE_DACL_PROTECTED` 后才通过。本结果只收口了**本 probe 覆盖的 owned-worker 子集**，
 不等于 formal Tier 20 gate 或整个 Phase 0 acceptance / release support。
 
-需特别记录两个不能藏掉的边界：workspace-write 的 token default DACL 仅加入 temp-capability full-access ACE 时，Node
-初始化曾以 `0xC0000142` 退出；当前 feasibility probe 必须再加并验证一个 `World FILE_ALL_ACCESS` 默认 ACE 才能在该 runner
-启动。该 ACE 扩大所有由目标 token 默认创建对象的授权面，仍需独立安全审查/收敛，故 artifact 保持
-`confinement=enforcement=partial`、`releaseEligible=false`。另外 `child_process.spawn()` 的 stdout-only、stderr-only 和
-dual-pipe 三种 grandchild 都仍返回 `EPERM`；`stdio: 'ignore'` 子进程则能在 Job 内退出并收敛，这个限制只记为已知
-partial boundary，不能称 piped stdio 已支持。
+需特别区分两项与 DSH 基线的差异，避免把 probe workaround 固化为设计。早期 hosted Windows 2022 / Node `v22.19.0`
+probe 在 default DACL 只加入 temp-capability 时以 `0xC0000142` 退出；当前 pass artifact 的实际 ACE 查询显示 workspace-write
+在 index 0 是 Temp capability `FILE_ALL_ACCESS`、flags `0`，index 1 另有 World `FILE_ALL_ACCESS`、flags `0`。与此对照，
+固定 DSH revision `f9d6609d182969c9f57499ef552edb78835cc4e4` 的本机实际 restricted Node `v24.15.0` 在
+workspace-write 只观测到 index 0 Temp capability `FILE_ALL_ACCESS` ACE，flags `0x03`（object + container inherit），无额外
+World full-access ACE；read-only 则以 World ACE 为 index 0。DSH target 在这个本机版本/上下文中两种模式都能启动。两次
+实验的 Node 版本、runner image、CreateProcess/stdio 方式、environment delivery 与 ACE flags 都不同，尚未隔离 `0xC0000142`
+根因；不能推断是某个对象的 access check，也不能把 World ACE 当产品方案。下一步只做同 Node / 同 runner 的 DSH-versus-owned
+受控差分，再决定如何对齐 DSH 原语；完整对照记录见
+[DSH-COMPARISON.md](../verify/windows-acl/evidence/DSH-COMPARISON.md)。
+
+另一项是 DSH 已明示并回归测试的受限 cell grandchild 边界：`stdio: 'inherit'` / `'ignore'` 可工作，stdout-only、stderr-only、
+dual-pipe 都返回 `EPERM`。Tier 20 保留诊断即可；它是 v1 unsupported capability，不是 Phase 0 blocker。不得为了让 pipe
+成功而移除 Low、WRITE_RESTRICTED 或 Job，也不得升级重试；如产品未来明确需要捕获任意 grandchild 输出，再另立 broker 项目。
+当前 artifact 保持 `confinement=enforcement=partial`、`releaseEligible=false`，因为 Windows ACL 本身仍是部分强制且该 feasibility
+fixture 不等于产品后端。
 
 Phase 0 的其余 blocker 仍包括：disposable `NODE_REPL_VERIFY_ACL_ROOT` 的真实 ACL-volume/owner/reparse/canonical-path
 preflight 与路径 disjointness；final installed/packed engine 而非 JS fixture；完整 ready/version/malformed/oversize/EOF/
