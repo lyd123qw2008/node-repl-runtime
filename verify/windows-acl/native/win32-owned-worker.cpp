@@ -268,9 +268,9 @@ void setExplicitAccess(EXPLICIT_ACCESSW* access, PSID sid, DWORD permissions, AC
   access->Trustee.ptstrName = reinterpret_cast<LPWSTR>(sid);
 }
 
-bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID administratorSid, PSID worldSid, PSID authenticatedSid, DWORD* error) {
+bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID administratorSid, PSID worldSid, PSID authenticatedSid, PSID restrictedSid, DWORD* error) {
   constexpr DWORD inherited = OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
-  std::array<EXPLICIT_ACCESSW, 5> entries{};
+  std::array<EXPLICIT_ACCESSW, 6> entries{};
   size_t count = 0;
   setExplicitAccess(&entries[count++], administratorSid, GENERIC_ALL, SET_ACCESS, inherited);
   setExplicitAccess(&entries[count++], worldSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
@@ -279,9 +279,11 @@ bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID admi
         FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER;
     setExplicitAccess(&entries[count++], authenticatedSid, deniedWrite, DENY_ACCESS, inherited);
     setExplicitAccess(&entries[count++], authenticatedSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
+    setExplicitAccess(&entries[count++], restrictedSid, GENERIC_READ | GENERIC_EXECUTE, SET_ACCESS, inherited);
   } else {
     constexpr DWORD writable = GENERIC_READ | GENERIC_WRITE | GENERIC_EXECUTE | FILE_DELETE_CHILD;
     setExplicitAccess(&entries[count++], authenticatedSid, writable, SET_ACCESS, inherited);
+    setExplicitAccess(&entries[count++], restrictedSid, writable, SET_ACCESS, inherited);
   }
 
   LocalAcl acl;
@@ -587,7 +589,7 @@ struct DrainState {
   }
 };
 
-bool queryTokenFacts(HANDLE process, bool* restricted, bool* low, DWORD* error) {
+bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, bool* restricted, bool* low, DWORD* error) {
   ScopedHandle token;
   HANDLE raw = nullptr;
   if (OpenProcessToken(process, TOKEN_QUERY, &raw) == FALSE) {
@@ -601,11 +603,28 @@ bool queryTokenFacts(HANDLE process, bool* restricted, bool* low, DWORD* error) 
     *error = GetLastError();
     return false;
   }
-  // This owned fixture uses a disabled Administrators SID plus an explicit
-  // DACL, rather than a WinRestrictedCodeSid restricting SID. The latter
-  // prevents the stock Node image from initializing its system DLLs on the
-  // hosted runner; TokenIsRestricted is the fact we require here.
   *restricted = isRestricted != FALSE;
+
+  DWORD restrictedSize = 0;
+  GetTokenInformation(token.get(), TokenRestrictedSids, nullptr, 0, &restrictedSize);
+  if (restrictedSize == 0) {
+    *error = GetLastError();
+    return false;
+  }
+  std::vector<BYTE> restrictedInfo(restrictedSize);
+  if (GetTokenInformation(token.get(), TokenRestrictedSids, restrictedInfo.data(), restrictedSize, &restrictedSize) == FALSE) {
+    *error = GetLastError();
+    return false;
+  }
+  auto* restrictedSids = reinterpret_cast<PTOKEN_GROUPS>(restrictedInfo.data());
+  bool foundExpected = false;
+  for (DWORD index = 0; index < restrictedSids->GroupCount; ++index) {
+    if (EqualSid(restrictedSids->Groups[index].Sid, expectedRestrictedSid) != FALSE) {
+      foundExpected = true;
+      break;
+    }
+  }
+  *restricted = *restricted && foundExpected;
 
   DWORD size = 0;
   GetTokenInformation(token.get(), TokenIntegrityLevel, nullptr, 0, &size);
@@ -765,9 +784,11 @@ int wmain(int argc, wchar_t** argv) {
   SidBuffer administratorSid;
   SidBuffer worldSid;
   SidBuffer authenticatedSid;
+  SidBuffer restrictedSid;
   if (!initializeSid(&administratorSid, WinBuiltinAdministratorsSid, &sidError) ||
       !initializeSid(&worldSid, WinWorldSid, &sidError) ||
-      !initializeSid(&authenticatedSid, WinAuthenticatedUserSid, &sidError)) {
+      !initializeSid(&authenticatedSid, WinAuthenticatedUserSid, &sidError) ||
+      !initializeSid(&restrictedSid, WinRestrictedCodeSid, &sidError)) {
     result.error = sidError;
     result.phase = "sid-preflight";
     return printResult(options, result);
@@ -791,23 +812,23 @@ int wmain(int argc, wchar_t** argv) {
     result.phase = "copy-worker";
     goto cleanup;
   }
-  if (!applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+  if (!applyOwnedAcl(targetNodePath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
     result.error = error;
     result.phase = "acl-node";
     goto cleanup;
   }
-  if (!applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+  if (!applyOwnedAcl(targetWorkerPath, L"read-only", administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
     result.error = error;
     result.phase = "acl-worker";
     goto cleanup;
   }
-  if (!writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+  if (!writeSeed(seedPath, &error) || !applyOwnedAcl(seedPath, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
     result.error = error == ERROR_SUCCESS ? GetLastError() : error;
     result.phase = "seed-acl";
     goto cleanup;
   }
-  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
-      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error) ||
+      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), restrictedSid.get(), &error)) {
     result.error = error;
     result.phase = "apply-dacl";
     goto cleanup;
@@ -820,8 +841,9 @@ int wmain(int argc, wchar_t** argv) {
   }
   currentToken = ScopedHandle(rawCurrentToken);
   {
+    SID_AND_ATTRIBUTES restrictedAttribute{restrictedSid.get(), 0};
     HANDLE rawRestrictedToken = nullptr;
-    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 0, nullptr, &rawRestrictedToken);
+    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 1, &restrictedAttribute, &rawRestrictedToken);
     if (created == FALSE) {
       result.error = GetLastError();
       result.phase = "create-restricted-token";
@@ -957,7 +979,7 @@ int wmain(int argc, wchar_t** argv) {
     for (auto& carrier : carrierChild) carrier.reset();
     result.tokenRestricted = false;
     result.tokenLow = false;
-    if (!queryTokenFacts(targetProcess.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
+    if (!queryTokenFacts(targetProcess.get(), restrictedSid.get(), &result.tokenRestricted, &result.tokenLow, &error)) {
       result.error = error;
       result.phase = "inspect-target-token";
       TerminateProcess(targetProcess.get(), 1);
