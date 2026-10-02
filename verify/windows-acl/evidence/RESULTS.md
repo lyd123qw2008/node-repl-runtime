@@ -13,7 +13,7 @@ Windows ACL confinement is available in node-repl-runtime.
 | `10-dsh-source-baseline` | pinned DSH `f9d6609d182969c9f57499ef552edb78835cc4e4`, `sandbox-windows-acl/tests/control.spec.ts` | **REFERENCE_PASS**: 3 tests | The external DSH nested runner reference can reach a final restricted Node payload with captured stdout/stderr and fd 7 binary control. It remains an external oracle only. |
 | `10-ci-native-audit-artifact` | GitHub Actions run [`36996109769`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36996109769), then local hash/manifest/mode verification | **NATIVE_AUDIT_PASS**, reference-only | CI MSVC/Windows SDK independently compiled and self-tested ABI, OS handle-list sentinel, and bounded Job-zero-active accounting facts; no token/ACL/Node launcher support follows. |
 | `10-native-abi-and-koffi-preflight` | `node scripts/run-native-preflight.mjs` | **UNSUPPORTED**, expected exit `2`; exact isolated Koffi x64 ABI/loadability sub-check passed | The owned Windows required path is fail-closed; a Koffi binding preflight is not token/ACL/Job evidence and no raw-Node fallback is authorized. |
-| `20-owned-restricted-token-job` | GitHub Actions run [`37018555957`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37018555957) (`v22.19.0`, expanded fd 0–7 and outside-path matrix), earlier `v22.19.0` run [`37016397591`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37016397591), and `v22.23.3` core run [`37014751908`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | **OWNED_WORKER_PROBE_PASS (not formal Tier 20 acceptance)**, both `read-only` and `workspace-write`; final artifacts report `releaseEligible=false`, `confinement=enforcement=partial` | Proves only the enumerated fixture facts; it is not Phase 0 overall acceptance or a runtime backend. External sibling-root write/delete are denied. The workspace-write default DACL requires both temp-capability and World full-access ACEs; piped child stdio remains `EPERM`. |
+| `20-owned-restricted-token-job` | GitHub Actions run [`37022202477`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37022202477) (`v22.19.0`, exact SID/DACL/Low/pipe inspectors plus fd 0–7 and outside-path matrix), earlier `v22.23.3` core run [`37014751908`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | **OWNED_WORKER_PROBE_PASS (not formal Tier 20 acceptance)**, both `read-only` and `workspace-write`; artifact reports `releaseEligible=false`, `confinement=enforcement=partial` | Proves only the enumerated fixture facts; it is not Phase 0 overall acceptance or a runtime backend. External sibling-root write/delete are denied, and protected DACL masks/cross-capability exclusion are queried. The workspace-write default DACL requires both temp-capability and World full-access ACEs; piped child stdio remains `EPERM`. |
 | Existing runtime regression | root `pnpm test` | **PASS**: 59 runtime, 15 adapter, 9 bootstrap tests | The isolated `verify/` addition did not alter the existing workspace build/test result. |
 
 Raw JSON observations are machine-local and intentionally ignored. They are
@@ -109,14 +109,16 @@ and overall Phase 0 remain **unsupported / not accepted**:
 | Windows ACL / read-only | **unsupported** | final installed/packed engine and supervisor integration; full versioned worker/runner protocol and crash/EOF/terminate/reset matrix; final product preflight, concurrent-owner/broker and bridge-lifecycle gates; document/validate all partial boundaries |
 | Windows ACL / workspace-write | **unsupported** | all read-only gaps plus production-acceptable default-object ACL (current probe needs an added World `FILE_ALL_ACCESS` default ACE), standing workspace grant/recovery/revocation semantics, and complete capability-SID negative regression |
 
-The Tier 20 artifact itself is **not** a Windows ACL backend. It is a throw-away
-native/Node feasibility fixture, with `confinement=enforcement=partial` and
-`releaseEligible=false`. It shows that a real restricted Node can launch in both
-modes on Node `v22.19.0` and `v22.23.3`, that explicit environment / handle allowlist /
-CRT fd 3–7 / Job settlement / post-quiescence cleanup are observable, and that the
-mode-specific workspace/private-temp write policy behaves as expected. It also records
-that ordinary `stdio: 'ignore'` child creation settles, while stdout-only, stderr-only,
-and dual-piped child stdio return `EPERM`.
+The Tier 20 artifact itself is **not** a Windows ACL backend or formal Tier 20 acceptance.
+It is a throw-away native/Node feasibility fixture, with `confinement=enforcement=partial`
+and `releaseEligible=false`. It shows that a real restricted Node can launch in both
+modes on Node `v22.19.0` and `v22.23.3`, that the exact restricted-SID set, protected
+DACLs, queried ACE masks/cross-capability exclusion, Low labels, default-DACL ACEs,
+explicit environment, handle allowlist/sentinel, fd 0–7, fd3/4–6 carriers, and fd3/fd7
+pipe types are observable. It also records mode-specific root writes, outside-path
+write/delete denials, Job assignment/settlement, and cleanup after quiescence. Ordinary
+`stdio: 'ignore'` child creation settles; stdout-only, stderr-only, and dual-piped child
+stdio return `EPERM`.
 
 The hosted Windows 2022 diagnostic isolated the write-mode loader failure: a token
 default DACL with only the private temp capability ACE caused Node `0xC0000142`; the
@@ -124,6 +126,11 @@ passing variant retains that private-temp grant **and** adds a World `FILE_ALL_A
 ACE. That broad default-object grant is an important partial boundary requiring
 security review/narrowing before production adoption; it is not process/object
 visibility isolation and does not enable `sandboxHost: 'required'`.
+
+The first queried DACL run also found capability ACE inheritance on staged files. The
+final fixture applies `PROTECTED_DACL_SECURITY_INFORMATION` to roots and staged files,
+then verifies `SE_DACL_PROTECTED`, exact workspace/temp grant masks, World write/delete
+absence (including `FILE_DELETE_CHILD`), and absence of the unrelated capability SID.
 
 The separate `node scripts/run-native-preflight.mjs` still deliberately exits `2`:
 its report-only/preflight inputs do not include the CI-owned-worker executable or a

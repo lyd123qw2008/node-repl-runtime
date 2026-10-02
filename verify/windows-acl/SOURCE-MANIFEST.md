@@ -55,16 +55,20 @@ The native worker, Node fixture, runner, and fail-closed contract are authored i
 repository and use only Windows APIs plus Node built-ins. The core probe passed in
 read-only and workspace-write under Node `v22.23.3`
 ([37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908));
-the expanded fd 0–7 plus external-path write/delete matrix passed under the minimum Node
-`v22.19.0` ([37018555957](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37018555957)).
-Earlier minimum-floor runs are [37016397591](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37016397591)
-and [37015202534](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37015202534).
-This is `OWNED_WORKER_PROBE_PASS` for the **probe only**, not formal Tier 20 acceptance; `releaseEligible=false` and overall Phase 0
-remains incomplete. Workspace-write requires both the temp capability and an additional
-World `FILE_ALL_ACCESS` default-DACL ACE on the tested runner; stdout/stderr/dual-piped
-cell-owned child spawns still return `EPERM`. The expanded probe also verifies all fd 0–7
-are valid, external sibling-root file creation and deletion are denied, and the pre-created
-outside sentinel remains readable. These facts and all non-claims are in
+the expanded fd 0–7 / outside-path / exact token-SID / protected-DACL / mask / Low-label /
+pipe-type matrix passed under the minimum Node `v22.19.0`
+([37022202477](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37022202477)).
+Earlier minimum-floor runs are [37018555957](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37018555957),
+[37016397591](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37016397591), and
+[37015202534](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37015202534).
+This is `OWNED_WORKER_PROBE_PASS` for the **probe only**, not formal Tier 20 acceptance;
+`releaseEligible=false` and overall Phase 0 remains incomplete. Workspace-write requires
+both the temp capability and an additional World `FILE_ALL_ACCESS` default-DACL ACE on
+the tested runner; stdout/stderr/dual-piped cell-owned child spawns still return `EPERM`.
+The final inspector confirms DACL protection, exact grant masks, World write/delete
+absence and cross-capability SID exclusion; all fd 0–7 are valid, external sibling-root
+file creation/deletion are denied, and the pre-created outside sentinel remains readable.
+These facts and all non-claims are in
 [native/README.md](native/README.md) and [evidence/RESULTS.md](evidence/RESULTS.md).
 
 ## Future upstream source inventory (not imported into the runtime)
