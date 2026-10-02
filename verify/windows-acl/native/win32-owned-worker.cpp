@@ -175,13 +175,20 @@ struct Options {
 struct ProbeResult {
   bool pass = false;
   bool tokenRestricted = false;
+  bool restrictedSidSetExact = false;
   bool tokenLow = false;
   bool daclApplied = false;
+  bool daclInspector = false;
+  bool worldWriteDeleteDenied = false;
+  bool workspaceGrantMaskVerified = false;
+  bool tempGrantMaskVerified = false;
+  bool unrelatedCapabilityAbsent = false;
   bool lowLabelApplied = false;
   bool defaultDaclGrant = false;
   bool defaultDaclWorldGrant = false;
   bool explicitEnvironmentBlock = false;
   bool handleAllowlist = false;
+  bool controlHandlePipe = false;
   bool crtDescriptorTable = false;
   bool fd3RoundTrip = false;
   bool carrierReads = false;
@@ -388,6 +395,85 @@ bool applyOwnedAcl(const std::wstring& path, const std::wstring& mode, PSID admi
     *error = result;
     return false;
   }
+  return true;
+}
+
+bool inspectPathDacl(
+    const std::wstring& path,
+    PSID worldSid,
+    PSID logonSid,
+    PSID authenticatedSid,
+    PSID expectedCapabilitySid,
+    const std::array<PSID, 2>& forbiddenCapabilitySids,
+    bool writable,
+    bool* worldWriteDeleteDenied,
+    bool* grantMaskVerified,
+    bool* forbiddenCapabilitiesAbsent,
+    DWORD* error) {
+  PACL dacl = nullptr;
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  DWORD status = GetNamedSecurityInfoW(
+      const_cast<LPWSTR>(path.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+      nullptr, nullptr, &dacl, nullptr, &descriptor);
+  if (status != ERROR_SUCCESS) {
+    *error = status;
+    return false;
+  }
+  if (dacl == nullptr || IsValidAcl(dacl) == FALSE) {
+    *error = ERROR_INVALID_ACL;
+    if (descriptor != nullptr) LocalFree(descriptor);
+    return false;
+  }
+
+  struct AceSummary { ACCESS_MASK mask = 0; bool present = false; };
+  auto summarize = [&](PSID expectedSid, AceSummary* summary) {
+    for (DWORD index = 0; index < dacl->AceCount; ++index) {
+      LPVOID rawAce = nullptr;
+      if (GetAce(dacl, index, &rawAce) == FALSE) {
+        *error = GetLastError();
+        return false;
+      }
+      auto* header = reinterpret_cast<PACE_HEADER>(rawAce);
+      if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
+      auto* allow = reinterpret_cast<PACCESS_ALLOWED_ACE>(rawAce);
+      PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
+      if (EqualSid(aceSid, expectedSid) != FALSE) {
+        summary->present = true;
+        summary->mask |= allow->Mask;
+      }
+    }
+    return true;
+  };
+
+  AceSummary world{};
+  AceSummary logon{};
+  AceSummary authenticated{};
+  AceSummary capability{};
+  std::array<AceSummary, 2> forbidden{};
+  if (!summarize(worldSid, &world) || !summarize(logonSid, &logon) ||
+      !summarize(authenticatedSid, &authenticated) || !summarize(expectedCapabilitySid, &capability)) {
+    if (descriptor != nullptr) LocalFree(descriptor);
+    return false;
+  }
+  for (size_t index = 0; index < forbiddenCapabilitySids.size(); ++index) {
+    if (forbiddenCapabilitySids[index] != nullptr && !summarize(forbiddenCapabilitySids[index], &forbidden[index])) {
+      if (descriptor != nullptr) LocalFree(descriptor);
+      return false;
+    }
+  }
+
+  constexpr ACCESS_MASK readExecute = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
+  constexpr ACCESS_MASK writeAndDelete = FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
+  constexpr ACCESS_MASK writableGrant = readExecute | FILE_GENERIC_WRITE | DELETE | FILE_DELETE_CHILD;
+  const ACCESS_MASK expectedGrant = writable ? writableGrant : readExecute;
+  *worldWriteDeleteDenied = (world.mask & readExecute) == readExecute && (world.mask & writeAndDelete) == 0;
+  *grantMaskVerified = authenticated.mask == expectedGrant && capability.mask == expectedGrant &&
+      (logon.mask & readExecute) == readExecute;
+  *forbiddenCapabilitiesAbsent = true;
+  for (size_t index = 0; index < forbiddenCapabilitySids.size(); ++index) {
+    if (forbiddenCapabilitySids[index] != nullptr && forbidden[index].present) *forbiddenCapabilitiesAbsent = false;
+  }
+  if (descriptor != nullptr) LocalFree(descriptor);
   return true;
 }
 
@@ -745,7 +831,7 @@ struct DrainState {
   }
 };
 
-bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrictedSids, DWORD expectedRestrictedCount, PSID expectedDefaultDaclSid, PSID expectedWorldSid, bool* restricted, bool* defaultDaclGrant, bool* defaultDaclWorldGrant, bool* low, DWORD* error) {
+bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrictedSids, DWORD expectedRestrictedCount, PSID expectedDefaultDaclSid, PSID expectedWorldSid, bool* restricted, bool* restrictedSidSetExact, bool* defaultDaclGrant, bool* defaultDaclWorldGrant, bool* low, DWORD* error) {
   ScopedHandle token;
   HANDLE raw = nullptr;
   if (OpenProcessToken(process, TOKEN_QUERY, &raw) == FALSE) {
@@ -781,9 +867,9 @@ bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrict
       }
     }
   }
-  bool allExpectedSidsFound = true;
-  for (DWORD expected = 0; expected < expectedRestrictedCount; ++expected) allExpectedSidsFound = allExpectedSidsFound && foundExpected[expected];
-  *restricted = *restricted && allExpectedSidsFound;
+  *restrictedSidSetExact = restrictedSids->GroupCount == expectedRestrictedCount;
+  for (DWORD expected = 0; expected < expectedRestrictedCount; ++expected) *restrictedSidSetExact = *restrictedSidSetExact && foundExpected[expected];
+  *restricted = *restricted && *restrictedSidSetExact;
 
   DWORD defaultDaclSize = 0;
   GetTokenInformation(token.get(), TokenDefaultDacl, nullptr, 0, &defaultDaclSize);
@@ -904,8 +990,8 @@ int printResult(const Options& options, const ProbeResult& result) {
   const std::string status = result.pass ? "PASS" : "FAIL";
   std::printf(
       "{\"schemaVersion\":2,\"tool\":\"%s\",\"mode\":\"%s\",\"status\":\"%s\","
-      "\"tokenRestricted\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,\"defaultDaclWorldGrant\":%s,"
-      "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
+      "\"tokenRestricted\":%s,\"restrictedSidSetExact\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"daclInspector\":%s,\"worldWriteDeleteDenied\":%s,\"workspaceGrantMaskVerified\":%s,\"tempGrantMaskVerified\":%s,\"unrelatedCapabilityAbsent\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,\"defaultDaclWorldGrant\":%s,"
+      "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"controlHandlePipe\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
       "\"jobCreated\":%s,\"targetProcessCreated\":%s,\"targetProcessExited\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,\"targetExitSuccess\":%s,"
       "\"error\":%lu,\"phase\":\"%s\",\"targetExitCode\":%lu,\"targetReadyLine\":\"%s\",\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
@@ -913,13 +999,20 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonEscape(narrow(options.mode)).c_str(),
       status.c_str(),
       jsonBool(result.tokenRestricted).c_str(),
+      jsonBool(result.restrictedSidSetExact).c_str(),
       jsonBool(result.tokenLow).c_str(),
       jsonBool(result.daclApplied).c_str(),
+      jsonBool(result.daclInspector).c_str(),
+      jsonBool(result.worldWriteDeleteDenied).c_str(),
+      jsonBool(result.workspaceGrantMaskVerified).c_str(),
+      jsonBool(result.tempGrantMaskVerified).c_str(),
+      jsonBool(result.unrelatedCapabilityAbsent).c_str(),
       jsonBool(result.lowLabelApplied).c_str(),
       jsonBool(result.defaultDaclGrant).c_str(),
       jsonBool(result.defaultDaclWorldGrant).c_str(),
       jsonBool(result.explicitEnvironmentBlock).c_str(),
       jsonBool(result.handleAllowlist).c_str(),
+      jsonBool(result.controlHandlePipe).c_str(),
       jsonBool(result.crtDescriptorTable).c_str(),
       jsonBool(result.fd3RoundTrip).c_str(),
       jsonBool(result.carrierReads).c_str(),
@@ -1071,6 +1164,46 @@ int wmain(int argc, wchar_t** argv) {
   }
   result.daclApplied = true;
   {
+    const bool workspaceWritable = options.mode == L"workspace-write";
+    const std::array<PSID, 2> workspaceForbidden{tempCapabilitySid.get(), nullptr};
+    const std::array<PSID, 2> tempForbidden{workspaceCapabilitySid.get(), nullptr};
+    const std::array<PSID, 2> stagedForbidden{workspaceCapabilitySid.get(), tempCapabilitySid.get()};
+    bool workspaceWorldSafe = false;
+    bool tempWorldSafe = false;
+    bool seedWorldSafe = false;
+    bool nodeWorldSafe = false;
+    bool workerWorldSafe = false;
+    bool workspaceGrant = false;
+    bool tempGrant = false;
+    bool seedGrant = false;
+    bool nodeGrant = false;
+    bool workerGrant = false;
+    bool workspaceForeignAbsent = false;
+    bool tempForeignAbsent = false;
+    bool seedCapsAbsent = false;
+    bool nodeCapsAbsent = false;
+    bool workerCapsAbsent = false;
+    if (!inspectPathDacl(options.workspace, worldSid.get(), logonSid.get(), authenticatedSid.get(), workspaceCapabilitySid.get(), workspaceForbidden, workspaceWritable, &workspaceWorldSafe, &workspaceGrant, &workspaceForeignAbsent, &error) ||
+        !inspectPathDacl(options.privateTemp, worldSid.get(), logonSid.get(), authenticatedSid.get(), tempCapabilitySid.get(), tempForbidden, workspaceWritable, &tempWorldSafe, &tempGrant, &tempForeignAbsent, &error) ||
+        !inspectPathDacl(seedPath, worldSid.get(), logonSid.get(), authenticatedSid.get(), worldSid.get(), stagedForbidden, false, &seedWorldSafe, &seedGrant, &seedCapsAbsent, &error) ||
+        !inspectPathDacl(targetNodePath, worldSid.get(), logonSid.get(), authenticatedSid.get(), worldSid.get(), stagedForbidden, false, &nodeWorldSafe, &nodeGrant, &nodeCapsAbsent, &error) ||
+        !inspectPathDacl(targetWorkerPath, worldSid.get(), logonSid.get(), authenticatedSid.get(), worldSid.get(), stagedForbidden, false, &workerWorldSafe, &workerGrant, &workerCapsAbsent, &error)) {
+      result.error = error;
+      result.phase = "inspect-dacl";
+      goto cleanup;
+    }
+    result.worldWriteDeleteDenied = workspaceWorldSafe && tempWorldSafe && seedWorldSafe && nodeWorldSafe && workerWorldSafe;
+    result.workspaceGrantMaskVerified = workspaceGrant;
+    result.tempGrantMaskVerified = tempGrant;
+    result.unrelatedCapabilityAbsent = workspaceForeignAbsent && tempForeignAbsent && seedCapsAbsent && nodeCapsAbsent && workerCapsAbsent;
+    result.daclInspector = result.worldWriteDeleteDenied && result.workspaceGrantMaskVerified && result.tempGrantMaskVerified && result.unrelatedCapabilityAbsent && seedGrant && nodeGrant && workerGrant;
+    if (!result.daclInspector) {
+      result.error = ERROR_INVALID_ACL;
+      result.phase = "dacl-inspector-mismatch";
+      goto cleanup;
+    }
+  }
+  {
     bool nodeLabel = false;
     bool workerLabel = false;
     bool seedLabel = false;
@@ -1146,6 +1279,13 @@ int wmain(int argc, wchar_t** argv) {
         result.phase = "create-carrier-pipe";
         goto cleanup;
       }
+    }
+    result.controlHandlePipe = GetFileType(fd3.parent.get()) == FILE_TYPE_PIPE && GetFileType(fd3.child.get()) == FILE_TYPE_PIPE &&
+        GetFileType(fd7.parent.get()) == FILE_TYPE_PIPE && GetFileType(fd7.child.get()) == FILE_TYPE_PIPE;
+    if (!result.controlHandlePipe) {
+      result.error = ERROR_INVALID_HANDLE;
+      result.phase = "control-handle-not-pipe";
+      goto cleanup;
     }
     ScopedHandle stdoutRead;
     ScopedHandle stdoutChild;
@@ -1248,7 +1388,7 @@ int wmain(int argc, wchar_t** argv) {
     result.tokenLow = false;
     std::array<PSID, 4> expectedRestrictedSids{logonSid.get(), worldSid.get(), workspaceCapabilitySid.get(), tempCapabilitySid.get()};
     const DWORD expectedRestrictedCount = options.mode == L"workspace-write" ? 4 : 2;
-    if (!queryTokenFacts(targetProcess.get(), expectedRestrictedSids, expectedRestrictedCount, defaultDaclCapability, worldSid.get(), &result.tokenRestricted, &result.defaultDaclGrant, &result.defaultDaclWorldGrant, &result.tokenLow, &error)) {
+    if (!queryTokenFacts(targetProcess.get(), expectedRestrictedSids, expectedRestrictedCount, defaultDaclCapability, worldSid.get(), &result.tokenRestricted, &result.restrictedSidSetExact, &result.defaultDaclGrant, &result.defaultDaclWorldGrant, &result.tokenLow, &error)) {
       result.error = error;
       result.phase = "inspect-target-token";
       TerminateProcess(targetProcess.get(), 1);
@@ -1424,7 +1564,7 @@ cleanup:
       result.phase = quiescent ? "cleanup" : "cleanup-before-quiescence";
     }
   }
-  result.pass = result.daclApplied && result.lowLabelApplied && result.defaultDaclGrant && result.defaultDaclWorldGrant && result.tokenRestricted && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist &&
+  result.pass = result.daclApplied && result.daclInspector && result.worldWriteDeleteDenied && result.workspaceGrantMaskVerified && result.tempGrantMaskVerified && result.unrelatedCapabilityAbsent && result.lowLabelApplied && result.defaultDaclGrant && result.defaultDaclWorldGrant && result.tokenRestricted && result.restrictedSidSetExact && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist && result.controlHandlePipe &&
       result.crtDescriptorTable && result.fd3RoundTrip && result.carrierReads && result.jobCreated && result.targetProcessCreated && result.targetProcessExited && result.targetAssignedToJob && result.targetResumed && result.jobSettled &&
       result.grantsRevokedAfterQuiescence && result.cleanup && result.targetReady && result.targetReportPass && result.targetExitSuccess;
   if (result.pass) result.phase = "complete";
