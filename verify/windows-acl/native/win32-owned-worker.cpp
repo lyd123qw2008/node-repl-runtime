@@ -796,6 +796,8 @@ int wmain(int argc, wchar_t** argv) {
     return printResult(options, result);
   }
   result.daclApplied = true;
+  ScopedHandle currentToken;
+  HANDLE rawCurrentToken = nullptr;
   const std::wstring seedPath = joinPath(options.workspace, L"tier20-seed.txt");
   const std::wstring targetNodePath = joinPath(options.workspace, L"tier20-node.exe");
   const std::wstring targetWorkerPath = joinPath(options.workspace, L"tier20-worker.mjs");
@@ -808,8 +810,6 @@ int wmain(int argc, wchar_t** argv) {
     result.phase = "target-staging";
     goto cleanup;
   }
-  ScopedHandle currentToken;
-  HANDLE rawCurrentToken = nullptr;
   if (OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, &rawCurrentToken) == FALSE) {
     result.error = GetLastError();
     result.phase = "open-current-token";
