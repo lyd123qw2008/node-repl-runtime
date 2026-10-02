@@ -772,18 +772,14 @@ int wmain(int argc, wchar_t** argv) {
     return printResult(options, result);
   }
 
-  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
-      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
-    result.error = error;
-    result.phase = "apply-dacl";
-    return printResult(options, result);
-  }
-  result.daclApplied = true;
   ScopedHandle currentToken;
   HANDLE rawCurrentToken = nullptr;
   const std::wstring seedPath = joinPath(options.workspace, L"tier20-seed.txt");
   const std::wstring targetNodePath = joinPath(options.workspace, L"tier20-node.exe");
   const std::wstring targetWorkerPath = joinPath(options.workspace, L"tier20-worker.mjs");
+  // Stage the executable, script, and seed before the mode DACL denies the
+  // parent runner's Authenticated Users write access. Their explicit DACLs are
+  // then protected, and the roots receive the mode ACL last.
   if (CopyFileW(options.node.c_str(), targetNodePath.c_str(), TRUE) == FALSE) {
     result.error = GetLastError();
     result.phase = "copy-node";
@@ -809,6 +805,13 @@ int wmain(int argc, wchar_t** argv) {
     result.phase = "seed-acl";
     goto cleanup;
   }
+  if (!applyOwnedAcl(options.workspace, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error) ||
+      !applyOwnedAcl(options.privateTemp, options.mode, administratorSid.get(), worldSid.get(), authenticatedSid.get(), &error)) {
+    result.error = error;
+    result.phase = "apply-dacl";
+    goto cleanup;
+  }
+  result.daclApplied = true;
   if (OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID, &rawCurrentToken) == FALSE) {
     result.error = GetLastError();
     result.phase = "open-current-token";
