@@ -402,7 +402,7 @@ bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, DWORD* error) {
   }
   auto* currentDacl = reinterpret_cast<PTOKEN_DEFAULT_DACL>(current.data());
   EXPLICIT_ACCESSW entry{};
-  setExplicitAccess(&entry, grantSid, FILE_ALL_ACCESS, SET_ACCESS, 0);
+  setExplicitAccess(&entry, grantSid, FILE_ALL_ACCESS, GRANT_ACCESS, 0);
   LocalAcl merged;
   DWORD result = SetEntriesInAclW(1, &entry, currentDacl->DefaultDacl, merged.out());
   if (result != ERROR_SUCCESS) {
@@ -911,6 +911,11 @@ int wmain(int argc, wchar_t** argv) {
   SidBuffer tempCapabilitySid;
   SidBuffer lowSid;
   DWORD runTag = 0;
+  DWORD secondTag = 0;
+  DWORD workspaceFirst = 0;
+  DWORD workspaceSecond = 0;
+  DWORD tempFirst = 0;
+  DWORD tempSecond = 0;
   if (!initializeSid(&administratorSid, WinBuiltinAdministratorsSid, &sidError) ||
       !initializeSid(&worldSid, WinWorldSid, &sidError) ||
       !initializeSid(&authenticatedSid, WinAuthenticatedUserSid, &sidError)) {
@@ -935,9 +940,14 @@ int wmain(int argc, wchar_t** argv) {
     result.phase = "find-logon-sid";
     goto cleanup;
   }
-  runTag = static_cast<DWORD>((GetTickCount64() ^ GetCurrentProcessId()) & 0x3fffffff);
-  if (!workspaceCapabilitySid.initializeCustom({1, runTag == 0 ? 1 : runTag}, &error) ||
-      !tempCapabilitySid.initializeCustom({2, runTag == 0 ? 1 : runTag}, &error) ||
+  runTag = static_cast<DWORD>((GetTickCount64() ^ (static_cast<ULONGLONG>(GetCurrentProcessId()) << 16) ^ 0x6d2b79f5ULL) & 0x3fffffff);
+  secondTag = static_cast<DWORD>(((GetTickCount64() >> 17) ^ GetCurrentThreadId() ^ 0x1b873593ULL) & 0x3fffffff);
+  workspaceFirst = runTag == 0 ? 1 : runTag;
+  workspaceSecond = secondTag == 0 || secondTag == workspaceFirst ? ((workspaceFirst + 17) & 0x3fffffff) : secondTag;
+  tempFirst = (workspaceSecond + 0x15555555) & 0x3fffffff;
+  tempSecond = (workspaceFirst + 0x2aaaaaaa) & 0x3fffffff;
+  if (!workspaceCapabilitySid.initializeCustom({workspaceFirst, workspaceSecond == 0 ? 2 : workspaceSecond}, &error) ||
+      !tempCapabilitySid.initializeCustom({tempFirst == 0 ? 3 : tempFirst, tempSecond == 0 ? 4 : tempSecond, 1}, &error) ||
       !initializeSid(&lowSid, WinLowLabelSid, &error)) {
     result.error = error;
     result.phase = "capability-sid";
