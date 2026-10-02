@@ -57,11 +57,12 @@ The Tier 20 short-retention CI artifact contains the compiled fixture executable
 
 The probe records an exact restricted-SID set and Low-integrity token, protected
 workspace/temp/staged-file DACLs with queried grant masks, World write/delete denial and
-cross-capability SID absence, queried Low labels, explicit environment filtering,
-token default-DACL ACEs, inherited-handle sentinel exclusion, UCRT fd 0–7 table,
-fd3/4–6 traffic and verified fd3/fd7 pipe types, suspended creation → Job assignment →
-resume, ordinary child-process Job settlement, mode-specific root writes, external path
-write/delete denial, and grant cleanup only after Job quiescence. Its
+cross-capability SID absence, queried Low labels, explicit environment filtering, the
+final token's ordered default-DACL ACE type/flags/mask/trustee-class list, inherited-handle
+sentinel exclusion, UCRT fd 0–7 table, fd3/4–6 traffic and verified fd3/fd7 pipe types,
+suspended creation → Job assignment → resume, ordinary child-process Job settlement,
+mode-specific root writes, external path write/delete denial, and grant cleanup only
+after Job quiescence. Its
 `OWNED_WORKER_PROBE_PASS` status applies only to this owned-worker feasibility probe, not
 formal Tier 20 acceptance; `releaseEligible` remains `false`, and both confinement and
 enforcement remain `partial`.
@@ -72,15 +73,21 @@ Important measured boundaries:
   helper applies `PROTECTED_DACL_SECURITY_INFORMATION` to the test roots and staged
   files, then re-queries protection state, World write/delete mask, each expected grant
   mask, and absence of the unrelated capability SID.
-- On the hosted Windows 2022 runner, a workspace-write token whose default DACL grants
-  only the private temp capability SID failed Node initialization with `0xC0000142`.
-  The passing probe retains that private-temp `FILE_ALL_ACCESS` ACE and adds/verifies a
-  World `FILE_ALL_ACCESS` compatibility ACE. This broad default-object grant needs a
-  separate security review/narrowing before any production adoption; this evidence does
-  not establish object-discovery isolation.
+- The ordered-ACE comparison shows an unresolved source divergence. On hosted Windows
+  2022 / Node `v22.19.0`, the earlier probe's temp-capability-only default DACL failed
+  Node initialization with `0xC0000142`; its current passing token has non-inheritable
+  World/full and temp-capability/full ACEs. The pinned DSH runner, queried locally on
+  Node `v24.15.0`, starts with only an inheritable temp-capability/full ACE in
+  workspace-write (World/full is used in read-only). The DSH and probe also differ in
+  environment delivery and launch topology. This does not isolate the cause. Treat the
+  probe World ACE as temporary test-only compatibility evidence, not a production fix;
+  use a same-Node/same-runner differential before changing the probe toward DSH. See
+  the full [DSH comparison](../evidence/DSH-COMPARISON.md).
 - A child started with `stdio: 'ignore'` settles under the owned Job. stdout-only,
-  stderr-only, and dual-piped `child_process.spawn()` cases return `EPERM`; the fixture
-  records these as a known partial-boundary diagnostic rather than claiming support.
+  stderr-only, and dual-piped `child_process.spawn()` cases return `EPERM`, matching the
+  pinned DSH Windows ACL documented/tested boundary. This remains unsupported in v1 and
+  is recorded diagnostically; it is not a Phase 0 hard-gate blocker or a reason to relax
+  token/Low/Job/default-DACL restrictions.
 - The probe does not establish final packaged-engine startup, the complete runtime
   protocol/reset/error suite, concurrent broker/owner isolation, bridge lifecycle, or
   all Windows preflight/negative regressions. It cannot by itself satisfy overall Phase 0
