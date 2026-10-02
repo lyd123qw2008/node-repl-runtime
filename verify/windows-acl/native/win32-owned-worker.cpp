@@ -817,7 +817,6 @@ int wmain(int argc, wchar_t** argv) {
   }
   currentToken = ScopedHandle(rawCurrentToken);
   {
-    SID_AND_ATTRIBUTES disabledAdministrator{administratorSid.get(), 0};
     SID_AND_ATTRIBUTES restrictedAttributes[2] = {
         {restrictedSid.get(), 0},
         // Keep the normal World read/execute access pass available for system
@@ -826,7 +825,7 @@ int wmain(int argc, wchar_t** argv) {
         {worldSid.get(), 0},
     };
     HANDLE rawRestrictedToken = nullptr;
-    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 1, &disabledAdministrator, 0, nullptr, 2, restrictedAttributes, &rawRestrictedToken);
+    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 2, restrictedAttributes, &rawRestrictedToken);
     if (created == FALSE) {
       result.error = GetLastError();
       result.phase = "create-restricted-token";
@@ -939,7 +938,7 @@ int wmain(int argc, wchar_t** argv) {
     result.explicitEnvironmentBlock = true;
     DWORD creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED;
     if (CreateProcessAsUserW(
-            currentToken.get(),
+            restrictedToken.get(),
             targetNodePath.c_str(),
             mutableCommand.data(),
             nullptr,
