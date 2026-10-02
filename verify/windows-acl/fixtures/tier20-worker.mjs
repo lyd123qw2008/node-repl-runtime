@@ -83,7 +83,7 @@ async function spawnSettlementProbe(stdio = 'ignore') {
 
 function inspectDescriptors() {
   const descriptors = []
-  for (let fd = 3; fd <= 7; fd += 1) {
+  for (let fd = 0; fd <= 7; fd += 1) {
     try {
       const stats = fstatSync(fd)
       descriptors.push({ fd, valid: true, isFile: stats.isFile(), isFIFO: stats.isFIFO(), size: stats.size })
@@ -117,6 +117,29 @@ function runFileAndEnvironmentChecks() {
   if (rootWrite.ok) cleanup(rootWritePath)
   if (tempWrite.ok) cleanup(tempWritePath)
 
+  const outsideRoot = resolve(workspace, '..')
+  const outsideWritePath = join(outsideRoot, `tier20-outside-write-${process.pid}.txt`)
+  const outsideWrite = attemptWrite(outsideWritePath, 'tier20-outside-write\n')
+  if (outsideWrite.ok) {
+    failures.push('outside-write-allowed')
+    cleanup(outsideWritePath)
+  } else if (!['EPERM', 'EACCES'].includes(outsideWrite.code)) {
+    failures.push('outside-write-denied-for-unexpected-reason')
+  }
+  const outsideSentinelPath = join(outsideRoot, 'tier20-external-sentinel.txt')
+  let outsideSentinelContent = null
+  let outsideDelete = { ok: false, code: null }
+  try {
+    outsideSentinelContent = readFileSync(outsideSentinelPath, 'utf8')
+    unlinkSync(outsideSentinelPath)
+    outsideDelete = { ok: true, code: null }
+    failures.push('outside-delete-allowed')
+  } catch (error) {
+    outsideDelete = { ok: false, code: error?.code ?? String(error) }
+  }
+  if (outsideSentinelContent !== 'tier20-external-sentinel\n') failures.push('outside-sentinel-not-readable')
+  if (!outsideDelete.ok && !['EPERM', 'EACCES'].includes(outsideDelete.code)) failures.push('outside-delete-denied-for-unexpected-reason')
+
   if (process.cwd().toLowerCase() !== resolve(workspace).toLowerCase()) failures.push('cwd-not-workspace')
   if (process.env.TMP !== privateTemp) failures.push('TMP-not-private-temp')
   if (process.env.TEMP !== privateTemp) failures.push('TEMP-not-private-temp')
@@ -137,6 +160,9 @@ function runFileAndEnvironmentChecks() {
     seedRead: seed === 'tier20-seed\n',
     workspaceWrite: rootWrite,
     privateTempWrite: tempWrite,
+    outsideWrite,
+    outsideSentinelReadable: outsideSentinelContent === 'tier20-external-sentinel\n',
+    outsideDelete,
     environment: {
       markerBeforeConsume,
       markerVisibleAfterConsume: Object.hasOwn(process.env, 'NODE_REPL_KERNEL_CONTROL'),

@@ -68,6 +68,7 @@ async function runMode(mode) {
       }
     }
 
+    await writeFile(join(parent, 'tier20-external-sentinel.txt'), 'tier20-external-sentinel\n', { flag: 'wx' })
     const invocation = spawnSync(nativeExecutable, [
       '--mode', mode,
       '--node', nodeExecutable,
