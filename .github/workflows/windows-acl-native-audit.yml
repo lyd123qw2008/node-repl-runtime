@@ -14,6 +14,7 @@ on:
       - verify/windows-acl/scripts/run-dsh-token-snapshot.mjs
       - verify/windows-acl/scripts/run-owned-worker-probe.mjs
       - verify/windows-acl/scripts/run-workspace-write-differential.mjs
+      - verify/windows-acl/scripts/workspace-write-differential-logic.mjs
       - verify/windows-acl/tests/**
       - verify/windows-acl/package.json
       - verify/windows-acl/pnpm-lock.yaml
@@ -247,8 +248,10 @@ jobs:
           $matrixExit = $LASTEXITCODE
           $matrixEvidence = Join-Path $tier20Evidence '20-workspace-write-differential\evidence.json'
           $dshEvidence = Join-Path $tier20Evidence '10-dsh-token-snapshot\evidence.json'
-          if (Test-Path -LiteralPath $matrixEvidence -PathType Leaf) { Copy-Item -LiteralPath $matrixEvidence -Destination $matrixArtifact -Force }
-          if (Test-Path -LiteralPath $dshEvidence -PathType Leaf) { Copy-Item -LiteralPath $dshEvidence -Destination $matrixArtifact -Force }
+          $a5Evidence = Join-Path $tier20Evidence '20-owned-restricted-token-job\evidence.json'
+          if (Test-Path -LiteralPath $matrixEvidence -PathType Leaf) { Copy-Item -LiteralPath $matrixEvidence -Destination (Join-Path $matrixArtifact 'workspace-write-differential.json') -Force }
+          if (Test-Path -LiteralPath $dshEvidence -PathType Leaf) { Copy-Item -LiteralPath $dshEvidence -Destination (Join-Path $matrixArtifact 'dsh-token-snapshot.json') -Force }
+          if (Test-Path -LiteralPath $a5Evidence -PathType Leaf) { Copy-Item -LiteralPath $a5Evidence -Destination (Join-Path $matrixArtifact 'a5-owned-worker-control.json') -Force }
           if ($matrixExit -ne 0) { throw "A1-A5 matrix was inconclusive (exit $matrixExit); inspect the uploaded evidence." }
 
       - name: Upload one-shot DSH differential evidence

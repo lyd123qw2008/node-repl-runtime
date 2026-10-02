@@ -8,7 +8,7 @@ Windows ACL confinement is available in node-repl-runtime.
 
 | Tier | Command / source | Result | Allowed conclusion |
 | --- | --- | --- | --- |
-| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl test` | **PASS**: 7 transport/launch cases plus 12 Tier 10 preflight/reference fail-closed, ABI, or boundary cases and 2 Tier 20 fail-closed contracts (21 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
+| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl test` | **PASS**: 7 transport/launch cases, 12 Tier 10 preflight/reference fail-closed/ABI/boundary cases, 2 Tier 20 fail-closed contracts, and 4 matrix classifier/artifact contracts (25 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
 | `00-unconfined-node-fd7` evidence | `node scripts/run-unconfined-fd7.mjs` with an external `NODE_REPL_VERIFY_OUT` | **REFERENCE_PASS** | Node v24.15.0 x64 used real `node.exe`; the host-first version-1 handshake, marker consumption, state/reset, bounded output, and normal direct-child exit were observed. |
 | `10-dsh-source-baseline` | pinned DSH `f9d6609d182969c9f57499ef552edb78835cc4e4`, `sandbox-windows-acl/tests/control.spec.ts` | **REFERENCE_PASS**: 3 tests | The external DSH nested runner reference can reach a final restricted Node payload with captured stdout/stderr and fd 7 binary control. It remains an external oracle only. |
 | `10-ci-native-audit-artifact` | GitHub Actions run [`36996109769`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36996109769), then local hash/manifest/mode verification | **NATIVE_AUDIT_PASS**, reference-only | CI MSVC/Windows SDK independently compiled and self-tested ABI, OS handle-list sentinel, and bounded Job-zero-active accounting facts; no token/ACL/Node launcher support follows. |
@@ -128,6 +128,12 @@ aggregator nevertheless returned `MATRIX_INCONCLUSIVE`: its A5 validator looked 
 filename, so the DSH snapshot overwrote the matrix's detailed A2–A4 records. Therefore
 the same-run A4 control cannot be certified from the retained artifact, even though its
 native status was `FAIL`.
+
+After the run was interpreted, the local matrix collector was corrected so future outputs
+use distinct DSH/matrix/A5 artifact filenames and the A5 predicate reads nested native Job
+assignment/settlement facts. Pure classifier regression tests cover the observed A1 failure,
+valid A5 nested evidence, and fail-closed missing-Job evidence. These post-run fixes do not
+repair or replace the missing evidence from run `37038295237`; the matrix was not repeated.
 
 **Decision:** apply the fail-closed stop rule—Windows workspace-write remains unsupported
 and is not a Phase 0 primary route. A1 did not pass because a Node 22.19 grandchild using
