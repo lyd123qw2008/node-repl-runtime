@@ -738,8 +738,8 @@ Phase 0 的成功仅是对特定已测 backend/mode 的继续授权，不自动�
 
 #### Phase 0 当前实测状态（2026-10-02）
 
-本轮已在本仓库外于 `verify/windows-acl/` 建立不依赖 DSH package、未进入 root workspace 的验证器；其 raw artifact 写到
-caller 指定的忽略路径，tracked 的只包含 schema、provenance、matrix 和结果摘要。当前结果必须按 tier 解读：
+本轮已在本仓库 `verify/windows-acl/` 建立不依赖 DSH package、未进入 root workspace 的 non-production 验证器；raw evidence 写到
+caller 指定的忽略路径或短期 CI artifact，tracked 包含自有 probe/fixture、fail-closed contract、provenance、matrix 与结果摘要，未修改 `packages/*` 生产 runtime。当前结果必须按 tier 解读：
 
 | Tier / artifact | 实测结果 | 可以得出的结论 | 明确不能得出的结论 |
 | --- | --- | --- | --- |
@@ -747,15 +747,27 @@ caller 指定的忽略路径，tracked 的只包含 schema、provenance、matrix
 | `10-dsh-source-baseline` | `REFERENCE_PASS` | 在固定且 clean 的 DSH source revision 上，外部 DSH nested runner reference test 通过 final restricted Node 的 denied write、普通 output capture 与 256 KiB fd 7 binary echo。 | **不是 owned implementation。** 无 own final Job、own explicit restricted env、native handle allowlist 或 final target quiescence-before-revoke 证明。 |
 | `10-ci-native-audit-artifact` | `NATIVE_AUDIT_PASS`（GitHub Actions Windows MSVC 构建后，本机 hash/manifest/mode 二次验证） | 独立 native probe 已实测 narrow Windows-header ABI、`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` omitted-sentinel、以及 suspended-create → Job assign → resume → bounded zero-active accounting。 | **不是 sandbox。** 不创建 restricted token/ACL/Low，不启动 Node，不证明 final target fd 3–7、显式 environment 或 grant-revoke safety。 |
 | `10-native-abi-and-koffi-preflight` | `UNSUPPORTED` / expected exit `2`；exact isolated `koffi@3.1.1` x64 ABI/loadability sub-check 为 `PASS` | required path 按 fail-closed 处理；已确认 selected Win32 exports 可 bind 且 static x64 record layouts 相符，但不允许 fallback 到 raw Node。 | 不调用 token/ACL/Job/child API，因此不能把 ABI pass 或 Node/DSH reference pass 晋升为 Windows ACL support。 |
+| `20-owned-restricted-token-job` (本仓库外 non-production owned-worker probe) | `OWNED_WORKER_PROBE_PASS` 于 Node `v22.19.0` minimum 与 Windows runner Node `v22.23.3`；[minimum-floor runs 37018555957 / 37016397591](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37018555957)、[earlier `v22.23.3` run 37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | read-only / workspace-write 的 restricted token + Low label、DACL/SACL、explicit env、OS handle allowlist/sentinel、CRT fd 0–7、fd3/4–6 carriers、suspended→Job→resume、实际 Node、workspace/private-temp-only 写入及外部路径 write/delete denial、普通 child settlement、Job quiescence 后 cleanup 均在 probe 中有实测。 | 仅表示这个 fixture / owned-worker probe 通过，不是整个 Phase 0 支持结论；workspace-write 的 token default DACL 必须保留 temp capability 和额外 `World FILE_ALL_ACCESS` ACE（temp-only 曾导致 Node `0xC0000142`）；child piped stdio 仍返回 `EPERM`；没有 final packaged engine、完整 protocol/runner failure、broker 并发隔离、DSH bridge lifecycle 和全部 preflight/negative regressions 的证据。`releaseEligible=false`，仍禁止 `sandboxHost: 'required'`。 |
 
-本机 C++ compiler 不再是阻塞项：独立 native header/handle-list/Job-accounting audit 已由固定 GitHub Actions Windows
-runner 构建，并以 source commit、manifest、双 SHA-256 与本机重跑 modes 验证；它仍不能替代 final Node target 的 integration
-proof。当前实际阻塞是：默认 invocation 没有配置 repo 外的 disposable `NODE_REPL_VERIFY_ACL_ROOT`（另一次临时 external
-NTFS root 只通过 Node-level canonical/reparse/disjoint check，仍为 `PENDING_OWNED_ACL_PROBE`）；虽已有 isolated exact
-`koffi@3.1.1`，但没有 owned restricted-token/Low/DACL/Job launcher；且 `CreateProcessAsUserW` 的显式 final-target
-environment ABI、final-target native OS-handle allowlist/sentinel、以及 private-temp revoke-after-final-tree-quiescence
-仍未实现、未实测。因此 Windows ACL 的两个 mode 都保持 **unsupported**。本机 Node 22.19.x minimum floor 也尚未重跑，Node
-24 pass 不可替代该兼容性验证。详见
+本机 C++ compiler 不再是阻塞项；独立 native header/handle-list/Job-accounting audit 及 Tier 20 owned-worker
+fixture 均由固定 Windows Server 2022 CI 构建/执行。owned-worker probe 已在 Node `v22.23.3` 与项目最低版本
+`v22.19.0` 上通过 `read-only` / `workspace-write`，包含真实受限 Node、冻结显式 environment、fd 3–7、OS handle
+allowlist、suspended create → Job assign → resume、workspace/temp 写行为、子进程 Job settlement 和 quiescence 后清理。
+这只收口了**本 probe 覆盖的 owned-worker 子集**，不等于整个 Phase 0 gate 或 release support。
+
+需特别记录两个不能藏掉的边界：workspace-write 的 token default DACL 仅加入 temp-capability full-access ACE 时，Node
+初始化曾以 `0xC0000142` 退出；当前 feasibility probe 必须再加并验证一个 `World FILE_ALL_ACCESS` 默认 ACE 才能在该 runner
+启动。该 ACE 扩大所有由目标 token 默认创建对象的授权面，仍需独立安全审查/收敛，故 artifact 保持
+`confinement=enforcement=partial`、`releaseEligible=false`。另外 `child_process.spawn()` 的 stdout-only、stderr-only 和
+dual-pipe 三种 grandchild 都仍返回 `EPERM`；`stdio: 'ignore'` 子进程则能在 Job 内退出并收敛，这个限制只记为已知
+partial boundary，不能称 piped stdio 已支持。
+
+Phase 0 的其余 blocker 仍包括：disposable `NODE_REPL_VERIFY_ACL_ROOT` 的真实 ACL-volume/owner/reparse/canonical-path
+preflight 与路径 disjointness；final installed/packed engine 而非 JS fixture；完整 ready/version/malformed/oversize/EOF/
+backpressure、runner crash/IPC disconnect/terminate/reset 测试；capability broker、两个并发 owner 与 late-reply 隔离；
+DSH bridge 的 Agent identity/policy drift/dispose 状态机；DACL/SACL 与 standing-grant/recovery/negative regression 的完整
+matrix。因此 **Phase 0 整体验收仍未通过**，Windows ACL backend/modes 仍 unsupported，`sandboxHost: 'required'` 必须
+继续 fail closed。详见
 [`verify/windows-acl/evidence/RESULTS.md`](../verify/windows-acl/evidence/RESULTS.md)、
 [`verify/windows-acl/native/README.md`](../verify/windows-acl/native/README.md) 与
 [`verify/windows-acl/evidence/matrix-template.md`](../verify/windows-acl/evidence/matrix-template.md)。

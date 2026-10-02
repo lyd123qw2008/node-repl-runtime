@@ -18,6 +18,7 @@ function childEnvironment(outputRoot) {
     NODE_REPL_VERIFY_NATIVE_AUDIT_DIR: _nativeAuditDirectory,
     NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT: _nativeAuditCommit,
     NODE_REPL_VERIFY_NATIVE_AUDIT_SHA256: _nativeAuditSha256,
+    NODE_REPL_VERIFY_TIER20_NATIVE: _tier20Native,
     NODE_REPL_VERIFY_NODE: _nodeExecutable,
     NODE_REPL_VERIFY_OUT: _output,
     ...environment
@@ -80,6 +81,28 @@ test('10: DSH reference baseline fails closed without an explicit clean source r
 test('10: CI native artifact verifier fails closed without an exact artifact directory, source commit, and expected hash', { skip: !windowsOnly }, async () => {
   const evidence = await runFailClosed('../native/verify-artifact.mjs', '10-ci-native-audit-artifact')
   assert.equal(evidence.failure.code, 'NATIVE_AUDIT_ARTIFACT_INVALID')
+})
+
+test('20: owned-worker probe fails closed without the exact native launcher', { skip: !windowsOnly }, async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'node-repl-phase0-tier20-missing-launcher-'))
+  try {
+    const result = spawnSync(process.execPath, [join(verifierRoot, 'scripts', 'run-owned-worker-probe.mjs')], {
+      cwd: verifierRoot,
+      env: childEnvironment(outputRoot),
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    assert.equal(result.status, 2)
+    const evidence = JSON.parse(await readFile(join(outputRoot, '20-owned-restricted-token-job', 'evidence.json'), 'utf8'))
+    assert.equal(evidence.status, 'UNSUPPORTED')
+    assert.equal(evidence.restrictedToken, false)
+    assert.equal(evidence.jobOwnership, false)
+    assert.equal(evidence.daclGrant, false)
+    assert.equal(evidence.osHandleAllowlistProven, false)
+    assert.ok(evidence.observations.every(observation => observation.failure?.code === 'NATIVE_LAUNCHER_REQUIRED'))
+  } finally {
+    await rm(outputRoot, { recursive: true, force: true })
+  }
 })
 
 test('10: CI native artifact verifier requires an independently supplied executable hash', { skip: !windowsOnly }, async () => {

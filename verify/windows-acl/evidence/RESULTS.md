@@ -8,11 +8,12 @@ Windows ACL confinement is available in node-repl-runtime.
 
 | Tier | Command / source | Result | Allowed conclusion |
 | --- | --- | --- | --- |
-| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl run test` | **PASS**: 7 transport/launch cases plus 11 Tier 10 preflight/reference fail-closed, ABI, or boundary cases (18 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
+| `00-unconfined-node-fd7` | `corepack pnpm --dir verify/windows-acl test` | **PASS**: 7 transport/launch cases plus 11 Tier 10 preflight/reference fail-closed, ABI, or boundary cases and 1 Tier 20 fail-closed contract (19 total) | The owned Node-only fixture can use an explicit fd 7 protocol on this machine. It is unconfined. |
 | `00-unconfined-node-fd7` evidence | `node scripts/run-unconfined-fd7.mjs` with an external `NODE_REPL_VERIFY_OUT` | **REFERENCE_PASS** | Node v24.15.0 x64 used real `node.exe`; the host-first version-1 handshake, marker consumption, state/reset, bounded output, and normal direct-child exit were observed. |
 | `10-dsh-source-baseline` | pinned DSH `f9d6609d182969c9f57499ef552edb78835cc4e4`, `sandbox-windows-acl/tests/control.spec.ts` | **REFERENCE_PASS**: 3 tests | The external DSH nested runner reference can reach a final restricted Node payload with captured stdout/stderr and fd 7 binary control. It remains an external oracle only. |
 | `10-ci-native-audit-artifact` | GitHub Actions run [`36996109769`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/36996109769), then local hash/manifest/mode verification | **NATIVE_AUDIT_PASS**, reference-only | CI MSVC/Windows SDK independently compiled and self-tested ABI, OS handle-list sentinel, and bounded Job-zero-active accounting facts; no token/ACL/Node launcher support follows. |
 | `10-native-abi-and-koffi-preflight` | `node scripts/run-native-preflight.mjs` | **UNSUPPORTED**, expected exit `2`; exact isolated Koffi x64 ABI/loadability sub-check passed | The owned Windows required path is fail-closed; a Koffi binding preflight is not token/ACL/Job evidence and no raw-Node fallback is authorized. |
+| `20-owned-restricted-token-job` | GitHub Actions run [`37018555957`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37018555957) (`v22.19.0`, expanded fd 0–7 and outside-path matrix), earlier `v22.19.0` run [`37016397591`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37016397591), and `v22.23.3` core run [`37014751908`](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | **OWNED_WORKER_PROBE_PASS (not formal Tier 20 acceptance)**, both `read-only` and `workspace-write`; final artifacts report `releaseEligible=false`, `confinement=enforcement=partial` | Proves only the enumerated fixture facts; it is not Phase 0 overall acceptance or a runtime backend. External sibling-root write/delete are denied. The workspace-write default DACL requires both temp-capability and World full-access ACEs; piped child stdio remains `EPERM`. |
 | Existing runtime regression | root `pnpm test` | **PASS**: 59 runtime, 15 adapter, 9 bootstrap tests | The isolated `verify/` addition did not alter the existing workspace build/test result. |
 
 Raw JSON observations are machine-local and intentionally ignored. They are
@@ -100,42 +101,51 @@ or prove a future final worker tree settles before capability-grant revocation.
 
 ## Owned Windows gate status
 
-Both rows remain `unsupported`:
+The Tier 20 owned-worker feasibility probe passes, but the Windows ACL backend/modes
+and overall Phase 0 remain **unsupported / not accepted**:
 
-| Backend / mode | Status | Missing required facts |
+| Backend / mode | Status | Remaining required facts |
 | --- | --- | --- |
-| Windows ACL / read-only | **unsupported** | token/ACL/Low lease, explicit target environment, OS handle allowlist applied to the final Node target, owned restricted Job and final-tree quiescence evidence |
-| Windows ACL / workspace-write | **unsupported** | all read-only missing facts plus workspace/private-temp capability grants and post-quiescence revocation proof |
+| Windows ACL / read-only | **unsupported** | final installed/packed engine and supervisor integration; full versioned worker/runner protocol and crash/EOF/terminate/reset matrix; final product preflight, concurrent-owner/broker and bridge-lifecycle gates; document/validate all partial boundaries |
+| Windows ACL / workspace-write | **unsupported** | all read-only gaps plus production-acceptable default-object ACL (current probe needs an added World `FILE_ALL_ACCESS` default ACE), standing workspace grant/recovery/revocation semantics, and complete capability-SID negative regression |
 
-The native preflight deliberately exits `2` because:
+The Tier 20 artifact itself is **not** a Windows ACL backend. It is a throw-away
+native/Node feasibility fixture, with `confinement=enforcement=partial` and
+`releaseEligible=false`. It shows that a real restricted Node can launch in both
+modes on Node `v22.19.0` and `v22.23.3`, that explicit environment / handle allowlist /
+CRT fd 3–7 / Job settlement / post-quiescence cleanup are observable, and that the
+mode-specific workspace/private-temp write policy behaves as expected. It also records
+that ordinary `stdio: 'ignore'` child creation settles, while stdout-only, stderr-only,
+and dual-piped child stdio return `EPERM`.
 
-1. a default run without `NODE_REPL_VERIFY_ACL_ROOT` is blocked, while a separate
-   existing external NTFS test root passed only the Node-level canonical/reparse/
-   repository-and-evidence-disjoint check and remains `PENDING_OWNED_ACL_PROBE`;
-2. although exact isolated `koffi@3.1.1` now loaded and bound selected x64 Win32
-   exports with expected record layouts, no owned restricted-token/Low/DACL/Job
-   launcher exists; and
-3. explicit restricted-target environment and native OS handle-allowlist proofs
-   have not started.
+The hosted Windows 2022 diagnostic isolated the write-mode loader failure: a token
+default DACL with only the private temp capability ACE caused Node `0xC0000142`; the
+passing variant retains that private-temp grant **and** adds a World `FILE_ALL_ACCESS`
+ACE. That broad default-object grant is an important partial boundary requiring
+security review/narrowing before production adoption; it is not process/object
+visibility isolation and does not enable `sandboxHost: 'required'`.
 
-A local `cl.exe`, `g++.exe`, or `clang++.exe` installation is no longer a release
-blocker: the independently compiled GitHub Actions artifact above covers the narrow
-header/handle-list/Job accounting oracle. Its pass cannot replace the missing
-final-target integration proofs.
+The separate `node scripts/run-native-preflight.mjs` still deliberately exits `2`:
+its report-only/preflight inputs do not include the CI-owned-worker executable or a
+configured disposable `NODE_REPL_VERIFY_ACL_ROOT`. A previous external NTFS root only
+passed the Node-level canonical/reparse/repository-and-evidence-disjoint checks and
+remains `PENDING_OWNED_ACL_PROBE`; volume/owner/ACL/preflight, junction behavior, and
+full path disjointness remain open. The Koffi sub-check also remains only ABI/loadability
+proof and invokes none of the bound token/ACL/Job APIs.
 
-The Koffi sub-check bound `CreatePipe`, `SetHandleInformation`, `CreateJobObjectW`,
-`AssignProcessToJobObject`, `QueryInformationJobObject`, `ResumeThread`,
-`CloseHandle`, `CreateRestrictedToken`, and `CreateProcessAsUserW`. It invoked none
-of those APIs, created no Win32 security object, and is therefore only a narrow ABI/
-loadability observation.
+A local `cl.exe`, `g++.exe`, or `clang++.exe` installation is no longer required for
+the Tier 20 probe because CI compiles the native fixture. That CI pass does not replace
+the outstanding final-engine, protocol, lifecycle, bridge, concurrency, and preflight
+acceptance cases.
 
 ## Next permitted work
 
-Do not promote Tier 00/10 evidence into runtime behavior. The next Phase 0
-implementation step, if separately continued, is an isolated Tier 20 owned
-prototype outside `packages/*`: first apply the CI-verified native handle-list and
-Job facts to a final target plus prove its explicit environment ABI, then a
-restricted ACL/token lease, then a private fd 3 runner with fd 4–6 carriers and
-fd 7, followed by final target Job-quiescence and handle-sentinel tests. See
-[matrix-template.md](matrix-template.md), [CLAIMS.md](CLAIMS.md), and
+Keep production/default host behavior unchanged and retain fail-closed semantics. Before
+any Windows ACL backend or `sandboxHost: 'required'` support claim, complete the remaining
+Phase 0 matrix with a real installed/packed engine, runner crash/IPC disconnect/terminate
+and protocol/reset cases, concurrent-owner isolation, capability broker and DSH bridge
+lifecycle tests, ACL-capable-volume/owner/reparse/canonical-disjoint preflight, and
+negative ACL/SACL/recovery regressions. Separately review whether the World default-DACL
+compatibility ACE can be narrowed without breaking Node startup and without broadening
+object access. See [matrix-template.md](matrix-template.md), [CLAIMS.md](CLAIMS.md), and
 [../SOURCE-MANIFEST.md](../SOURCE-MANIFEST.md).
