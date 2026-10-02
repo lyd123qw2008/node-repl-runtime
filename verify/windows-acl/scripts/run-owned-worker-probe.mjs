@@ -1,0 +1,142 @@
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const verifierRoot = fileURLToPath(new URL('../', import.meta.url))
+const requestedEvidenceRoot = process.env.NODE_REPL_VERIFY_OUT
+const evidenceRoot = requestedEvidenceRoot === undefined
+  ? join(verifierRoot, 'spike', 'windows-acl-tier20')
+  : join(resolve(requestedEvidenceRoot), '20-owned-restricted-token-job')
+const nativeExecutable = process.env.NODE_REPL_VERIFY_TIER20_NATIVE
+const nodeExecutable = process.env.NODE_REPL_VERIFY_NODE ?? process.execPath
+const workerPath = join(verifierRoot, 'fixtures', 'tier20-worker.mjs')
+const modes = ['read-only', 'workspace-write']
+
+const nonClaims = [
+  'This is a non-production owned-worker feasibility probe, not a runtime launcher.',
+  'The probe establishes only the tested Windows ACL/token/Low/Job/fd/environment facts; it does not constrain network egress or ambient process visibility.',
+  'Cell-created child processes remain subject to the owned Job but are not a general OS process-visibility policy.',
+  'No result enables sandboxHost required or changes the production/default host.',
+]
+
+async function runMode(mode) {
+  const parent = await mkdtemp(join(tmpdir(), 'node-repl-tier20-'))
+  const workspace = join(parent, 'workspace')
+  const privateTemp = join(parent, 'private-temp')
+  await mkdir(workspace)
+  await mkdir(privateTemp)
+  try {
+    if (process.platform !== 'win32') {
+      return {
+        schemaVersion: 2,
+        generatedAt: new Date().toISOString(),
+        evidenceTier: '20-owned-restricted-token-job',
+        suite: '20-owned-restricted-token-job',
+        mode,
+        status: 'UNSUPPORTED',
+        confinement: 'none',
+        enforcement: 'none',
+        restrictedToken: false,
+        jobOwnership: false,
+        daclGrant: false,
+        osHandleAllowlistProven: false,
+        releaseEligible: false,
+        nonClaims,
+        failure: { code: 'UNSUPPORTED_PLATFORM', message: 'Tier 20 is Windows x64 only.' },
+      }
+    }
+    if (nativeExecutable === undefined) {
+      return {
+        schemaVersion: 2,
+        generatedAt: new Date().toISOString(),
+        evidenceTier: '20-owned-restricted-token-job',
+        suite: '20-owned-restricted-token-job',
+        mode,
+        status: 'UNSUPPORTED',
+        confinement: 'none',
+        enforcement: 'none',
+        restrictedToken: false,
+        jobOwnership: false,
+        daclGrant: false,
+        osHandleAllowlistProven: false,
+        releaseEligible: false,
+        nonClaims,
+        failure: { code: 'NATIVE_LAUNCHER_REQUIRED', message: 'NODE_REPL_VERIFY_TIER20_NATIVE must name the exact native fixture.' },
+      }
+    }
+
+    const invocation = spawnSync(nativeExecutable, [
+      '--mode', mode,
+      '--node', nodeExecutable,
+      '--worker', workerPath,
+      '--workspace', workspace,
+      '--private-temp', privateTemp,
+    ], { encoding: 'utf8', windowsHide: true, maxBuffer: 256 * 1024 })
+    let native = null
+    try {
+      native = JSON.parse(`${invocation.stdout ?? ''}`.trim())
+    } catch (error) {
+      native = {
+        status: 'FAIL',
+        phase: 'native-json',
+        error: error instanceof Error ? error.message : String(error),
+        stdout: `${invocation.stdout ?? ''}`.slice(0, 8192),
+      }
+    }
+    const pass = invocation.status === 0 && native?.status === 'PASS'
+    return {
+      schemaVersion: 2,
+      generatedAt: new Date().toISOString(),
+      evidenceTier: '20-owned-restricted-token-job',
+      suite: '20-owned-restricted-token-job',
+      mode,
+      status: pass ? 'TIER20_PASS' : 'UNSUPPORTED',
+      confinement: pass ? 'partial' : 'none',
+      enforcement: pass ? 'partial' : 'none',
+      restrictedToken: native?.tokenRestricted === true,
+      jobOwnership: native?.jobCreated === true && native?.targetAssignedToJob === true && native?.jobSettled === true,
+      daclGrant: native?.daclApplied === true,
+      osHandleAllowlistProven: native?.handleAllowlist === true,
+      releaseEligible: false,
+      explicitEnvironmentBlock: native?.explicitEnvironmentBlock === true,
+      crtDescriptorTable: native?.crtDescriptorTable === true,
+      lowIntegrity: native?.tokenLowIntegrity === true,
+      targetReady: native?.targetReady === true,
+      targetReportPass: native?.targetReportPass === true,
+      targetResumed: native?.targetResumed === true,
+      grantsRevokedAfterQuiescence: native?.grantsRevokedAfterQuiescence === true,
+      cleanup: native?.cleanup === true,
+      native,
+      stderr: `${invocation.stderr ?? ''}`.slice(0, 8192),
+      nonClaims,
+    }
+  } finally {
+    await rm(parent, { recursive: true, force: true })
+  }
+}
+
+await mkdir(evidenceRoot, { recursive: true })
+const observations = []
+for (const mode of modes) observations.push(await runMode(mode))
+const passed = observations.every((observation) => observation.status === 'TIER20_PASS')
+const artifact = {
+  schemaVersion: 2,
+  generatedAt: new Date().toISOString(),
+  evidenceTier: '20-owned-restricted-token-job',
+  suite: '20-owned-restricted-token-job',
+  status: passed ? 'TIER20_PASS' : 'UNSUPPORTED',
+  confinement: passed ? 'partial' : 'none',
+  enforcement: passed ? 'partial' : 'none',
+  restrictedToken: observations.every((observation) => observation.restrictedToken),
+  jobOwnership: observations.every((observation) => observation.jobOwnership),
+  daclGrant: observations.every((observation) => observation.daclGrant),
+  osHandleAllowlistProven: observations.every((observation) => observation.osHandleAllowlistProven),
+  releaseEligible: false,
+  nonClaims,
+  observations,
+}
+await writeFile(join(evidenceRoot, 'evidence.json'), `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
+process.stdout.write(`${JSON.stringify({ status: artifact.status, evidencePath: join(evidenceRoot, 'evidence.json'), modes: observations.map(({ mode, status }) => ({ mode, status })) }, null, 2)}\n`)
+if (!passed) process.exitCode = 2
