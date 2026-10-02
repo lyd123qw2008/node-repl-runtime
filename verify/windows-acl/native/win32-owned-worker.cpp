@@ -819,9 +819,8 @@ int wmain(int argc, wchar_t** argv) {
   }
   currentToken = ScopedHandle(rawCurrentToken);
   {
-    SID_AND_ATTRIBUTES disabledAdministrator{administratorSid.get(), 0};
     HANDLE rawRestrictedToken = nullptr;
-    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 1, &disabledAdministrator, 0, nullptr, 0, nullptr, &rawRestrictedToken);
+    BOOL created = CreateRestrictedToken(currentToken.get(), DISABLE_MAX_PRIVILEGE, 0, nullptr, 0, nullptr, 0, nullptr, &rawRestrictedToken);
     if (created == FALSE) {
       result.error = GetLastError();
       result.phase = "create-restricted-token";
@@ -837,8 +836,7 @@ int wmain(int argc, wchar_t** argv) {
     }
     label.Label.Sid = lowSid.get();
     label.Label.Attributes = SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
-    bool skipLowForDiagnostic = true;
-    if (!skipLowForDiagnostic && SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
+    if (SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
       result.error = GetLastError();
       result.phase = "set-low-integrity";
       goto cleanup;
@@ -919,8 +917,8 @@ int wmain(int argc, wchar_t** argv) {
     startup.StartupInfo.hStdInput = stdinChild.get();
     startup.StartupInfo.hStdOutput = stdoutChild.get();
     startup.StartupInfo.hStdError = stderrChild.get();
-    startup.StartupInfo.cbReserved2 = 0;
-    startup.StartupInfo.lpReserved2 = nullptr;
+    startup.StartupInfo.cbReserved2 = static_cast<WORD>(descriptorBlock.size());
+    startup.StartupInfo.lpReserved2 = descriptorBlock.data();
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION processInformation{};
     std::wstring commandLine = quoteWindowsArgument(targetNodePath) + L" " + quoteWindowsArgument(targetWorkerPath);
