@@ -179,6 +179,7 @@ struct ProbeResult {
   bool daclApplied = false;
   bool lowLabelApplied = false;
   bool defaultDaclGrant = false;
+  bool defaultDaclWorldGrant = false;
   bool explicitEnvironmentBlock = false;
   bool handleAllowlist = false;
   bool crtDescriptorTable = false;
@@ -429,7 +430,7 @@ bool queryLowLabel(const std::wstring& path, PSID lowSid, bool* present, DWORD* 
   return true;
 }
 
-bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, DWORD* error) {
+bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, PSID additionalWorldSid, DWORD* error) {
   DWORD bytes = 0;
   GetTokenInformation(token, TokenDefaultDacl, nullptr, 0, &bytes);
   if (bytes == 0) {
@@ -442,10 +443,14 @@ bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, DWORD* error) {
     return false;
   }
   auto* currentDacl = reinterpret_cast<PTOKEN_DEFAULT_DACL>(current.data());
-  EXPLICIT_ACCESSW entry{};
-  setExplicitAccess(&entry, grantSid, FILE_ALL_ACCESS, GRANT_ACCESS, 0);
+  std::array<EXPLICIT_ACCESSW, 2> entries{};
+  setExplicitAccess(&entries[0], grantSid, FILE_ALL_ACCESS, GRANT_ACCESS, 0);
+  ULONG entryCount = 1;
+  if (additionalWorldSid != nullptr && EqualSid(additionalWorldSid, grantSid) == FALSE) {
+    setExplicitAccess(&entries[entryCount++], additionalWorldSid, FILE_ALL_ACCESS, GRANT_ACCESS, 0);
+  }
   LocalAcl merged;
-  DWORD result = SetEntriesInAclW(1, &entry, currentDacl->DefaultDacl, merged.out());
+  DWORD result = SetEntriesInAclW(entryCount, entries.data(), currentDacl->DefaultDacl, merged.out());
   if (result != ERROR_SUCCESS) {
     *error = result;
     return false;
@@ -740,7 +745,7 @@ struct DrainState {
   }
 };
 
-bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, PSID expectedDefaultDaclSid, bool* restricted, bool* defaultDaclGrant, bool* low, DWORD* error) {
+bool queryTokenFacts(HANDLE process, const std::array<PSID, 4>& expectedRestrictedSids, DWORD expectedRestrictedCount, PSID expectedDefaultDaclSid, PSID expectedWorldSid, bool* restricted, bool* defaultDaclGrant, bool* defaultDaclWorldGrant, bool* low, DWORD* error) {
   ScopedHandle token;
   HANDLE raw = nullptr;
   if (OpenProcessToken(process, TOKEN_QUERY, &raw) == FALSE) {
@@ -768,14 +773,17 @@ bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, PSID expectedDe
     return false;
   }
   auto* restrictedSids = reinterpret_cast<PTOKEN_GROUPS>(restrictedInfo.data());
-  bool foundExpected = false;
+  std::array<bool, 4> foundExpected{};
   for (DWORD index = 0; index < restrictedSids->GroupCount; ++index) {
-    if (EqualSid(restrictedSids->Groups[index].Sid, expectedRestrictedSid) != FALSE) {
-      foundExpected = true;
-      break;
+    for (DWORD expected = 0; expected < expectedRestrictedCount; ++expected) {
+      if (EqualSid(restrictedSids->Groups[index].Sid, expectedRestrictedSids[expected]) != FALSE) {
+        foundExpected[expected] = true;
+      }
     }
   }
-  *restricted = *restricted && foundExpected;
+  bool allExpectedSidsFound = true;
+  for (DWORD expected = 0; expected < expectedRestrictedCount; ++expected) allExpectedSidsFound = allExpectedSidsFound && foundExpected[expected];
+  *restricted = *restricted && allExpectedSidsFound;
 
   DWORD defaultDaclSize = 0;
   GetTokenInformation(token.get(), TokenDefaultDacl, nullptr, 0, &defaultDaclSize);
@@ -790,6 +798,7 @@ bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, PSID expectedDe
   }
   auto* tokenDefaultDacl = reinterpret_cast<PTOKEN_DEFAULT_DACL>(defaultDaclInfo.data());
   *defaultDaclGrant = false;
+  *defaultDaclWorldGrant = false;
   if (tokenDefaultDacl->DefaultDacl != nullptr && IsValidAcl(tokenDefaultDacl->DefaultDacl) != FALSE) {
     for (DWORD index = 0; index < tokenDefaultDacl->DefaultDacl->AceCount; ++index) {
       LPVOID rawAce = nullptr;
@@ -801,10 +810,9 @@ bool queryTokenFacts(HANDLE process, PSID expectedRestrictedSid, PSID expectedDe
       if (header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
       auto* allow = reinterpret_cast<PACCESS_ALLOWED_ACE>(rawAce);
       PSID aceSid = reinterpret_cast<PSID>(&allow->SidStart);
-      if (EqualSid(aceSid, expectedDefaultDaclSid) != FALSE && (allow->Mask & FILE_ALL_ACCESS) == FILE_ALL_ACCESS) {
-        *defaultDaclGrant = true;
-        break;
-      }
+      if ((allow->Mask & FILE_ALL_ACCESS) != FILE_ALL_ACCESS) continue;
+      if (EqualSid(aceSid, expectedDefaultDaclSid) != FALSE) *defaultDaclGrant = true;
+      if (EqualSid(aceSid, expectedWorldSid) != FALSE) *defaultDaclWorldGrant = true;
     }
   }
 
@@ -896,7 +904,7 @@ int printResult(const Options& options, const ProbeResult& result) {
   const std::string status = result.pass ? "PASS" : "FAIL";
   std::printf(
       "{\"schemaVersion\":2,\"tool\":\"%s\",\"mode\":\"%s\",\"status\":\"%s\","
-      "\"tokenRestricted\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,"
+      "\"tokenRestricted\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,\"defaultDaclWorldGrant\":%s,"
       "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
       "\"jobCreated\":%s,\"targetProcessCreated\":%s,\"targetProcessExited\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,\"targetExitSuccess\":%s,"
@@ -909,6 +917,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.daclApplied).c_str(),
       jsonBool(result.lowLabelApplied).c_str(),
       jsonBool(result.defaultDaclGrant).c_str(),
+      jsonBool(result.defaultDaclWorldGrant).c_str(),
       jsonBool(result.explicitEnvironmentBlock).c_str(),
       jsonBool(result.handleAllowlist).c_str(),
       jsonBool(result.crtDescriptorTable).c_str(),
@@ -1087,9 +1096,10 @@ int wmain(int argc, wchar_t** argv) {
     std::array<SID_AND_ATTRIBUTES, 4> restrictingAttributes{};
     restrictingAttributes[0] = SID_AND_ATTRIBUTES{logonSid.get(), 0};
     restrictingAttributes[1] = SID_AND_ATTRIBUTES{worldSid.get(), 0};
-    // Diagnostic only: restore both workspace/temp restricting SIDs while
-    // using World for the token default DACL, isolating the 0xC0000142 cause.
-    // This deliberate mismatch must not be used as a passing mode result.
+    // A previous hosted-runner probe found that the Temp capability alone in
+    // TokenDefaultDacl caused Node startup 0xC0000142. Workspace-write retains
+    // both capability SIDs and adds a World compatibility ACE; both grants are
+    // reported and inspected rather than silently weakening the evidence.
     DWORD restrictingCount = 2;
     if (options.mode == L"workspace-write") {
       restrictingAttributes[2] = SID_AND_ATTRIBUTES{workspaceCapabilitySid.get(), 0};
@@ -1113,8 +1123,9 @@ int wmain(int argc, wchar_t** argv) {
       result.phase = "set-low-integrity";
       goto cleanup;
     }
-    PSID defaultDaclCapability = worldSid.get();
-    if (!setTokenDefaultDaclGrant(restrictedToken.get(), defaultDaclCapability, &error)) {
+    PSID defaultDaclCapability = options.mode == L"workspace-write" ? tempCapabilitySid.get() : worldSid.get();
+    PSID defaultDaclWorldSid = options.mode == L"workspace-write" ? worldSid.get() : nullptr;
+    if (!setTokenDefaultDaclGrant(restrictedToken.get(), defaultDaclCapability, defaultDaclWorldSid, &error)) {
       result.error = error;
       result.phase = "set-default-dacl";
       goto cleanup;
@@ -1235,7 +1246,9 @@ int wmain(int argc, wchar_t** argv) {
     for (auto& carrier : carrierChild) carrier.reset();
     result.tokenRestricted = false;
     result.tokenLow = false;
-    if (!queryTokenFacts(targetProcess.get(), logonSid.get(), defaultDaclCapability, &result.tokenRestricted, &result.defaultDaclGrant, &result.tokenLow, &error)) {
+    std::array<PSID, 4> expectedRestrictedSids{logonSid.get(), worldSid.get(), workspaceCapabilitySid.get(), tempCapabilitySid.get()};
+    const DWORD expectedRestrictedCount = options.mode == L"workspace-write" ? 4 : 2;
+    if (!queryTokenFacts(targetProcess.get(), expectedRestrictedSids, expectedRestrictedCount, defaultDaclCapability, worldSid.get(), &result.tokenRestricted, &result.defaultDaclGrant, &result.defaultDaclWorldGrant, &result.tokenLow, &error)) {
       result.error = error;
       result.phase = "inspect-target-token";
       TerminateProcess(targetProcess.get(), 1);
@@ -1411,7 +1424,7 @@ cleanup:
       result.phase = quiescent ? "cleanup" : "cleanup-before-quiescence";
     }
   }
-  result.pass = result.daclApplied && result.lowLabelApplied && result.defaultDaclGrant && result.tokenRestricted && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist &&
+  result.pass = result.daclApplied && result.lowLabelApplied && result.defaultDaclGrant && result.defaultDaclWorldGrant && result.tokenRestricted && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist &&
       result.crtDescriptorTable && result.fd3RoundTrip && result.carrierReads && result.jobCreated && result.targetProcessCreated && result.targetProcessExited && result.targetAssignedToJob && result.targetResumed && result.jobSettled &&
       result.grantsRevokedAfterQuiescence && result.cleanup && result.targetReady && result.targetReportPass && result.targetExitSuccess;
   if (result.pass) result.phase = "complete";
