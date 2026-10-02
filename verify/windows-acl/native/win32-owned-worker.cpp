@@ -699,7 +699,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,"
       "\"jobCreated\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,"
-      "\"error\":%lu,\"phase\":\"%s\",\"targetExitCode\":%lu,\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
+      "\"error\":%lu,\"phase\":\"%s\",\"targetExitCode\":%lu,\"targetReadyLine\":\"%s\",\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
       "node-repl-win32-owned-worker",
       jsonEscape(narrow(options.mode)).c_str(),
       status.c_str(),
@@ -720,6 +720,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       static_cast<unsigned long>(result.error),
       jsonEscape(result.phase).c_str(),
       static_cast<unsigned long>(result.targetExitCode),
+      jsonEscape(result.targetReadyLine).c_str(),
       jsonEscape(result.childStdout).c_str(),
       jsonEscape(result.childStderr).c_str());
   return result.pass ? 0 : 1;
@@ -1036,6 +1037,10 @@ int wmain(int argc, wchar_t** argv) {
           TerminateJobObject(job.get(), 1);
         }
       }
+      // The target's Socket.end() closes only its write half. Close the host
+      // endpoint after the acknowledged closing frame so the target observes
+      // the final read-side EOF and can exit.
+      fd7.parent.reset();
     } else {
       result.error = lineError;
       result.phase = "ready-handshake";
