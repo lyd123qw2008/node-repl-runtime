@@ -117,6 +117,23 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Install the minimum supported Node runtime
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+          architecture: x64
+
+      - name: Verify the minimum Node runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $node = (Get-Command node.exe).Source
+          $version = (& $node --version).Trim()
+          if ($version -ne 'v22.19.0') {
+            throw "Expected the minimum supported Node v22.19.0, got $version at $node"
+          }
+          "Tier 20 target runtime: $node ($version)"
+
       - name: Build and run Tier 20 owned-worker probe
         shell: pwsh
         run: |
