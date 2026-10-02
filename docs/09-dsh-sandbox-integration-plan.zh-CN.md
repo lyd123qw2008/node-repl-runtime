@@ -6,8 +6,9 @@
 >
 > **2026-10-02 Phase 0 执行记录：** Tier 00 的 own、unconfined fd 7 transport fixture 已通过；Tier 10 的固定 DSH
 > source reference baseline 已通过；Tier 10 native preflight 刻意以 `UNSUPPORTED` / exit `2` fail closed。Windows ACL 的
-> `read-only` 与 `workspace-write` 仍均为 **unsupported**，不能启用 `sandboxHost: 'required'`。完整证据、non-claims 与
-> 后续 gate 见 [`verify/windows-acl/evidence/RESULTS.md`](../verify/windows-acl/evidence/RESULTS.md)。
+> `read-only` 仍因其余 hard gates 未完成而 **unsupported**；唯一一次 Node `v22.19.0` A1–A5 matrix 中 A1 未通过且整体
+> `MATRIX_INCONCLUSIVE`，因此 `workspace-write` 停止作为 Phase 0 主路径并继续 **unsupported**。不能启用
+> `sandboxHost: 'required'`。完整证据、non-claims 与后续 gate 见 [`verify/windows-acl/evidence/RESULTS.md`](../verify/windows-acl/evidence/RESULTS.md)。
 >
 > **结论先行（修订提案）：** 经 DSH bridge 使用的 owned sandbox 是**显式可选的 host mode**，不是 runtime 的默认
 > 依赖，也不是所有 `node_repl` 用户必须面对的 DSH fork / plugin 问题。默认 host 保持现有的
@@ -747,8 +748,8 @@ caller 指定的忽略路径或短期 CI artifact，tracked 包含自有 probe/f
 | `10-dsh-source-baseline` | `REFERENCE_PASS` | 在固定且 clean 的 DSH source revision 上，外部 DSH nested runner reference test 通过 final restricted Node 的 denied write、普通 output capture 与 256 KiB fd 7 binary echo。 | **不是 owned implementation。** 无 own final Job、own explicit restricted env、native handle allowlist 或 final target quiescence-before-revoke 证明。 |
 | `10-ci-native-audit-artifact` | `NATIVE_AUDIT_PASS`（GitHub Actions Windows MSVC 构建后，本机 hash/manifest/mode 二次验证） | 独立 native probe 已实测 narrow Windows-header ABI、`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` omitted-sentinel、以及 suspended-create → Job assign → resume → bounded zero-active accounting。 | **不是 sandbox。** 不创建 restricted token/ACL/Low，不启动 Node，不证明 final target fd 3–7、显式 environment 或 grant-revoke safety。 |
 | `10-native-abi-and-koffi-preflight` | `UNSUPPORTED` / expected exit `2`；exact isolated `koffi@3.1.1` x64 ABI/loadability sub-check 为 `PASS` | required path 按 fail-closed 处理；已确认 selected Win32 exports 可 bind 且 static x64 record layouts 相符，但不允许 fallback 到 raw Node。 | 不调用 token/ACL/Job/child API，因此不能把 ABI pass 或 Node/DSH reference pass 晋升为 Windows ACL support。 |
-| `20-owned-restricted-token-job` (本仓库外 non-production owned-worker probe) | `OWNED_WORKER_PROBE_PASS`（不是 formal Tier 20 acceptance）于 Node `v22.19.0`；[expanded ACE-order inspector run 37029476316](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37029476316)、[earlier `v22.23.3` core run 37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | read-only / workspace-write 的 restricted token + exact SID set、Low label、protected DACL / queried ACE masks / cross-capability exclusion、SACL、ordered TokenDefaultDacl ACE type/flags/masks/trustee classes、explicit env、OS handle allowlist/sentinel、fd 3–7 table + fd3/4–6 traffic + pipe-type query、suspended→Job→resume、实际 Node、workspace/private-temp-only 写入及外部路径 write/delete denial、普通 child settlement、Job quiescence 后 cleanup 均在 probe 中有实测。Pinned DSH token/default-DACL 实测比较见 [DSH-COMPARISON.md](../verify/windows-acl/evidence/DSH-COMPARISON.md)。 | 只代表这个 fixture / owned-worker feasibility probe 通过，不是 formal Tier 20 或 Phase 0 整体验收；probe 的 workspace-write World default ACE / flags 0 与 DSH measured temp-only inheritable ACE / flags `0x03` 及其 environment/launch topology 不同，尚未用 same-Node/same-runner matrix 定因，World ACE 不得迁为产品方案；piped child stdio 是 DSH 已记录的 unsupported v1 capability，不是 Phase 0 blocker；没有 final packaged engine、完整 protocol/runner failure、broker 并发隔离、DSH bridge lifecycle 和全部 preflight/negative regressions 的证据。`releaseEligible=false`，仍禁止 `sandboxHost: 'required'`。 |
-
+| `20-owned-restricted-token-job` (本仓库 `verify/` 内 non-production owned-worker probe) | `OWNED_WORKER_PROBE_PASS`（不是 formal Tier 20 acceptance）于 Node `v22.19.0`；[expanded ACE-order inspector run 37029476316](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37029476316)、[earlier `v22.23.3` core run 37014751908](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37014751908) | read-only / workspace-write 的 restricted token + exact SID set、Low label、protected DACL / queried ACE masks / cross-capability exclusion、SACL、ordered TokenDefaultDacl ACE type/flags/masks/trustee classes、explicit env、OS handle allowlist/sentinel、fd 3–7 table + fd3/4–6 traffic + pipe-type query、suspended→Job→resume、实际 Node、workspace/private-temp-only 写入及外部路径 write/delete denial、直接 owned-worker 的普通 child settlement、Job quiescence 后 cleanup 均在 probe 中有实测。Pinned DSH token/default-DACL 实测比较见 [DSH-COMPARISON.md](../verify/windows-acl/evidence/DSH-COMPARISON.md)。 | 只代表这个 fixture / owned-worker feasibility probe 通过，不是 formal Tier 20 或 Phase 0 整体验收；probe 的 workspace-write World default ACE / flags 0 与 DSH measured temp-only inheritable ACE / flags `0x03` 不同；单次同 runner/Node 差分中 DSH 的 `stdio: 'ignore'` grandchild 失败 (`0xC0000142`)，A1 未通过，故停止将 Windows workspace-write 作为 Phase 0 主路径；A2/A3/A4 仅保留 `FAIL` 汇总，A4 精确状态因 artifact 覆盖而不可确认，不得推断根因或重跑猜测。World ACE 不得迁为产品方案；piped child stdio 的 `EPERM` 仍是已知 unsupported v1 capability，且非该次 go/no-go 原因。没有 final packaged engine、完整 protocol/runner failure、broker 并发隔离、DSH bridge lifecycle 和全部 preflight/negative regressions 的证据。`releaseEligible=false`，仍禁止 `sandboxHost: 'required'`。 |
+| `20-workspace-write-differential` | [单次同 runner / Node v22.19 A1–A5 run 37038295237](https://github.com/lyd123qw2008/node-repl-runtime/actions/runs/37038295237) | **`MATRIX_INCONCLUSIVE`**：A1 token snapshot 满足预期，但 `stdio: 'ignore'` child status 为 `0xC0000142`；A2/A3/A4 汇总 `FAIL`；单独上传的 A5 Tier 20 控制通过。 | A1 失败足以触发 stop rule：Windows workspace-write 继续 unsupported，不作 Phase 0 主路径。Matrix artifact 同名覆盖了 A2–A4 详情，A5 aggregate 取值层级错误；因此 A4 控制不能认证、不能归因。已遵守“仅一次”边界，不重跑；正式 Tier 20 / Phase 0 仍未接受。 |
 本机 C++ compiler 不再是阻塞项；独立 native header/handle-list/Job-accounting audit 及 Tier 20 owned-worker
 fixture 均由固定 Windows Server 2022 CI 构建/执行。expanded owned-worker probe 在 Node `v22.19.0` 上通过
 `read-only` / `workspace-write`，并在早期 core run 中于 `v22.23.3` 通过。证据包含真实受限 Node、精确 restricted SID 集合、
@@ -758,20 +759,22 @@ ordinary child Job settlement 和 quiescence 后 cleanup。DACL inspector 首次
 对 roots 与 staged files 明确设置并查询 `SE_DACL_PROTECTED` 后才通过。本结果只收口了**本 probe 覆盖的 owned-worker 子集**，
 不等于 formal Tier 20 gate 或整个 Phase 0 acceptance / release support。
 
-需特别区分两项与 DSH 基线的差异，避免把 probe workaround 固化为设计。早期 hosted Windows 2022 / Node `v22.19.0`
-probe 在 default DACL 只加入 temp-capability 时以 `0xC0000142` 退出；当前 pass artifact 的实际 ACE 查询显示 workspace-write
-在 index 0 是 Temp capability `FILE_ALL_ACCESS`、flags `0`，index 1 另有 World `FILE_ALL_ACCESS`、flags `0`。与此对照，
-固定 DSH revision `f9d6609d182969c9f57499ef552edb78835cc4e4` 的本机实际 restricted Node `v24.15.0` 在
-workspace-write 只观测到 index 0 Temp capability `FILE_ALL_ACCESS` ACE，flags `0x03`（object + container inherit），无额外
-World full-access ACE；read-only 则以 World ACE 为 index 0。DSH target 在这个本机版本/上下文中两种模式都能启动。两次
-实验的 Node 版本、runner image、CreateProcess/stdio 方式、environment delivery 与 ACE flags 都不同，尚未隔离 `0xC0000142`
-根因；不能推断是某个对象的 access check，也不能把 World ACE 当产品方案。下一步只做同 Node / 同 runner 的 DSH-versus-owned
-受控差分，再决定如何对齐 DSH 原语；完整对照记录见
-[DSH-COMPARISON.md](../verify/windows-acl/evidence/DSH-COMPARISON.md)。
+需特别区分与 DSH 基线的差异，避免把 probe workaround 固化为设计。早期 hosted Windows 2022 / Node `v22.19.0`
+probe 在 default DACL 只加入 temp-capability 时以 `0xC0000142` 退出；当前 pass artifact 的 workspace-write 实际 ACE 为
+index 0 Temp capability `FILE_ALL_ACCESS` / flags `0`，index 1 World `FILE_ALL_ACCESS` / flags `0`。固定 DSH revision
+`f9d6609d182969c9f57499ef552edb78835cc4e4` 的本机 Node `v24.15.0` workspace-write final token 则观测到 temp-only
+full-access ACE / flags `0x03`，无额外 World full-access ACE。随后只运行了一次同 runner / Node `v22.19.0` A1–A5 差分：
+A1 的 final token snapshot 符合 DSH 预期，但 DSH fixture 的 `stdio: 'ignore'` grandchild 以 `0xC0000142` 退出，故 A1 未通过；
+A2/A3/A4 的 native 状态仅在 run summary 中显示 `FAIL`，A5 独立 Tier 20 evidence 通过。由于 artifact 同名覆盖及 A5
+汇总字段层级错误，整体为 `MATRIX_INCONCLUSIVE`，A4 的确切退出状态和根因不能确认。按 stop rule，Windows workspace-write
+停止作为 Phase 0 主路径，继续标记 unsupported；不归因于特定 ACE / access check，不迁移 World ACE，也不重跑或继续猜测。
+差异与缺失证据详见 [DSH-COMPARISON.md](../verify/windows-acl/evidence/DSH-COMPARISON.md) 和
+[RESULTS.md](../verify/windows-acl/evidence/RESULTS.md)。
 
-另一项是 DSH 已明示并回归测试的受限 cell grandchild 边界：`stdio: 'inherit'` / `'ignore'` 可工作，stdout-only、stderr-only、
-dual-pipe 都返回 `EPERM`。Tier 20 保留诊断即可；它是 v1 unsupported capability，不是 Phase 0 blocker。不得为了让 pipe
-成功而移除 Low、WRITE_RESTRICTED 或 Job，也不得升级重试；如产品未来明确需要捕获任意 grandchild 输出，再另立 broker 项目。
+DSH source tests/文档将受限 cell grandchild `stdio: 'inherit'` / `'ignore'` 记为可用，stdout-only、stderr-only、dual-pipe
+返回 `EPERM`；但本次最低支持 Node 的 DSH A1 实测中，`stdio: 'ignore'` grandchild 也返回 `0xC0000142`。不得把两者
+差异推断成 ACL 根因或通过移除 Low、WRITE_RESTRICTED、Job 来规避。`stdio: 'pipe'` 的 `EPERM` 是已知 unsupported v1
+capability，且不是此次 matrix 的 go/no-go 原因；不为 pipe 增强另建权限路径。
 当前 artifact 保持 `confinement=enforcement=partial`、`releaseEligible=false`，因为 Windows ACL 本身仍是部分强制且该 feasibility
 fixture 不等于产品后端。
 
@@ -779,8 +782,8 @@ Phase 0 的其余 blocker 仍包括：disposable `NODE_REPL_VERIFY_ACL_ROOT` 的
 preflight 与路径 disjointness；final installed/packed engine 而非 JS fixture；完整 ready/version/malformed/oversize/EOF/
 backpressure、runner crash/IPC disconnect/terminate/reset 测试；capability broker、两个并发 owner 与 late-reply 隔离；
 DSH bridge 的 Agent identity/policy drift/dispose 状态机；DACL/SACL 与 standing-grant/recovery/negative regression 的完整
-matrix。因此 **Phase 0 整体验收仍未通过**，Windows ACL backend/modes 仍 unsupported，`sandboxHost: 'required'` 必须
-继续 fail closed。详见
+matrix。因此 **Phase 0 整体验收仍未通过**：Windows ACL `workspace-write` 按 A1 失败 stop rule 停止作为主路径并继续
+unsupported；`read-only` 因上述 engine/protocol/broker/bridge/preflight 等 hard gates 未完成，也仍 unsupported。`sandboxHost: 'required'` 必须继续 fail closed。详见
 [`verify/windows-acl/evidence/RESULTS.md`](../verify/windows-acl/evidence/RESULTS.md)、
 [`verify/windows-acl/native/README.md`](../verify/windows-acl/native/README.md) 与
 [`verify/windows-acl/evidence/matrix-template.md`](../verify/windows-acl/evidence/matrix-template.md)。

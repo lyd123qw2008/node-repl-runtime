@@ -180,7 +180,7 @@ and overall Phase 0 remain **unsupported / not accepted**:
 | Backend / mode | Status | Remaining required facts |
 | --- | --- | --- |
 | Windows ACL / read-only | **unsupported** | final installed/packed engine and supervisor integration; full versioned worker/runner protocol and crash/EOF/terminate/reset matrix; final product preflight, concurrent-owner/broker and bridge-lifecycle gates; document/validate all partial boundaries |
-| Windows ACL / workspace-write | **unsupported** | all read-only gaps plus source-aligned TokenDefaultDacl / final launch semantics (the probe-only World ACE and flags-0 ACEs diverge from the measured DSH temp-capability inheritable ACE; run a controlled same-Node/same-runner differential before deciding what to migrate), standing workspace grant/recovery/revocation semantics, and complete capability-SID negative regression |
+| Windows ACL / workspace-write | **unsupported; stopped as the Phase 0 primary route** | A1 failed in the one-shot Node 22.19 DSH run (`stdio: 'ignore'` grandchild status `0xC0000142`); A2/A3/A4 summary statuses were `FAIL`, with A4 detail not retained. Do not infer cause or migrate the probe World ACE. Remaining product gaps include standing workspace grant/recovery/revocation semantics and complete capability-SID negative regression. |
 
 The Tier 20 artifact itself is **not** a Windows ACL backend or formal Tier 20 acceptance.
 It is a throw-away native/Node feasibility fixture, with `confinement=enforcement=partial`
@@ -189,18 +189,20 @@ modes on Node `v22.19.0` and `v22.23.3`, that the exact restricted-SID set, prot
 DACLs, queried ACE masks/cross-capability exclusion, Low labels, default-DACL ACEs,
 explicit environment, handle allowlist/sentinel, fd 0–7, fd3/4–6 carriers, and fd3/fd7
 pipe types are observable. It also records mode-specific root writes, outside-path
-write/delete denials, Job assignment/settlement, and cleanup after quiescence. Ordinary
-`stdio: 'ignore'` child creation settles; stdout-only, stderr-only, and dual-piped child
-stdio return `EPERM`.
+write/delete denials, Job assignment/settlement, and cleanup after quiescence. In the
+owned-worker fixture, ordinary `stdio: 'ignore'` child creation settles; stdout-only,
+stderr-only, and dual-piped child stdio return `EPERM`. This is distinct from DSH A1 in
+the one-shot minimum-Node run: there, the ignored grandchild exited `0xC0000142` and A1
+failed its child-settlement check.
 
-An earlier hosted Windows 2022 / Node `v22.19.0` probe matrix observed Node `0xC0000142`
-with a TokenDefaultDacl that only added the private-temp capability. A passing variant
-added World `FILE_ALL_ACCESS`. This was only correlation in a different launch/runtime
-context; the current pinned DSH workspace-write final token uses an inheritable temp-only
-full-access ACE on local Node `v24.15.0`. The DSH-aligned same-Node/same-host differential
-is still required before naming a cause or choosing a replacement. Treat the probe World
-ACE as an unresolved test-only divergence—not a production candidate—and do not infer
-that the failure is an access to a specific object. This evidence does not enable
+A one-shot same-runner / Node `v22.19.0` A1–A5 comparison was run (details above). A1 did
+not pass, A2/A3/A4 were summarized `FAIL`, and the matrix stayed inconclusive because
+A4's details were overwritten in artifact collection and the A5 aggregate predicate read
+lifecycle fields at the wrong nesting level. This is sufficient to stop treating Windows
+workspace-write as a Phase 0 primary route under the user's stop rule, but not sufficient
+to identify the startup failure's cause. No rerun or guessed ACL variant is authorized.
+The probe World ACE remains an unresolved test-only divergence, not a production candidate;
+do not infer an access to a specific object. This evidence does not enable
 `sandboxHost: 'required'`.
 
 The first queried DACL run also found capability ACE inheritance on staged files. The
@@ -223,12 +225,14 @@ acceptance cases.
 
 ## Next permitted work
 
-Keep production/default host behavior unchanged and retain fail-closed semantics. Before
-any Windows ACL backend or `sandboxHost: 'required'` support claim, complete the remaining
-Phase 0 matrix with a real installed/packed engine, runner crash/IPC disconnect/terminate
-and protocol/reset cases, concurrent-owner isolation, capability broker and DSH bridge
-lifecycle tests, ACL-capable-volume/owner/reparse/canonical-disjoint preflight, and
-negative ACL/SACL/recovery regressions. Separately review whether the World default-DACL
-compatibility ACE can be narrowed without breaking Node startup and without broadening
-object access. See [matrix-template.md](matrix-template.md), [CLAIMS.md](CLAIMS.md), and
-[../SOURCE-MANIFEST.md](../SOURCE-MANIFEST.md).
+Keep production/default host behavior unchanged and retain fail-closed semantics. The
+A1–A5 differential was run once and is closed: do not rerun it, add guessed ACE variants,
+or treat the World-ACE probe path as a product candidate. Phase 0 can still progress on
+independent gates without changing production behavior: launch an actual installed/packed
+engine; complete runner crash/IPC disconnect/terminate and protocol/reset cases; test
+concurrent-owner isolation, capability-broker and DSH-bridge lifecycle; exercise
+ACL-capable-volume/owner/reparse/canonical-disjoint preflight; and add negative ACL/SACL/
+recovery regressions. Windows ACL `read-only` and `workspace-write` remain unsupported,
+and no backend or `sandboxHost: 'required'` support claim is authorized until its full
+mode-specific gate passes. See [matrix-template.md](matrix-template.md), [CLAIMS.md](CLAIMS.md),
+and [../SOURCE-MANIFEST.md](../SOURCE-MANIFEST.md).

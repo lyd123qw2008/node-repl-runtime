@@ -71,12 +71,15 @@ the earlier `0xC0000142`**, and local Node 24 success must not be generalized to
 minimum Node 22 hosted runner.
 
 Therefore do not migrate or endorse the probe's World ACE, do not guess that a trustee
-substitution is sufficient, and do not weaken the restricted token or Job. Treat the
-World ACE as a temporary probe-specific compatibility divergence until a controlled
-same-runner / same-Node DSH-versus-owned launch matrix identifies the relevant difference.
-The next ACL work should be limited to that differential evidence and then alignment with
-the DSH token/default-DACL/launch primitives; it should not grow the standalone verifier
-into a runner, broker, or alternate sandbox.
+substitution is sufficient, and do not weaken the restricted token or Job. The one
+same-runner / same-Node `v22.19.0` A1–A5 matrix is now complete but inconclusive: DSH A1's
+ignored grandchild exited `0xC0000142`; A2/A3/A4 were summarized `FAIL`; the retained
+artifacts do not certify A4's exact status. The stop rule is to keep workspace-write
+unsupported as the Phase 0 primary route. No causal attribution, replacement ACL recipe,
+second matrix, or alternate launcher is justified by these data. Any future Phase 0 work
+should target independent remaining hard gates (including final engine/protocol, owner/
+broker concurrency, bridge lifecycle, and ACL preflight/recovery), not expand this probe
+or repeat guessed ACL variants.
 
 The DSH piped-grandchild denial is already documented and test-pinned; keep it as an
 unsupported v1 capability, with no retry or privilege relaxation. It is not a reason to
