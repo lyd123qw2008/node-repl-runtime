@@ -43,6 +43,8 @@ namespace {
 
 constexpr wchar_t kToolName[] = L"node-repl-win32-audit";
 constexpr DWORD kChildTimeoutMs = 10'000;
+constexpr DWORD kJobSettlementTimeoutMs = 2'000;
+constexpr DWORD kJobSettlementPollMs = 10;
 // The child deliberately starts with only one inherited test handle. Reserving
 // high-numbered parent handle slots before creating the sentinel keeps an omitted
 // sentinel slot from being spuriously reused by ordinary child initialization.
@@ -386,6 +388,7 @@ int runJobSettlement() {
     terminateAndSettle(childProcess.get());
     return failJson("job-settlement", "ResumeThread", resumeError);
   }
+  childThread.reset();
 
   const DWORD wait = WaitForSingleObject(childProcess.get(), kChildTimeoutMs);
   if (wait != WAIT_OBJECT_0) {
@@ -398,27 +401,42 @@ int runJobSettlement() {
     return failJson("job-settlement", "GetExitCodeProcess", GetLastError());
   }
 
+  // A signaled process handle is necessary but not sufficient for a Job-range
+  // cleanup claim: kernel Job accounting can settle asynchronously. Poll its own
+  // accounting record under a bounded deadline instead of assuming one immediate
+  // QueryInformationJobObject observes zero active descendants.
   JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting{};
-  if (QueryInformationJobObject(
-          job.get(),
-          JobObjectBasicAccountingInformation,
-          &accounting,
-          static_cast<DWORD>(sizeof(accounting)),
-          nullptr) == FALSE) {
-    return failJson("job-settlement", "QueryInformationJobObject", GetLastError());
-  }
+  bool accountingQuerySucceeded = false;
+  bool settled = false;
+  const ULONGLONG settlementDeadline = GetTickCount64() + kJobSettlementTimeoutMs;
+  do {
+    if (QueryInformationJobObject(
+            job.get(),
+            JobObjectBasicAccountingInformation,
+            &accounting,
+            static_cast<DWORD>(sizeof(accounting)),
+            nullptr) == FALSE) {
+      return failJson("job-settlement", "QueryInformationJobObject", GetLastError());
+    }
+    accountingQuerySucceeded = true;
+    settled = accounting.ActiveProcesses == 0 && accounting.TotalProcesses >= 1 &&
+        accounting.TotalTerminatedProcesses >= 1;
+    if (settled || GetTickCount64() >= settlementDeadline) break;
+    Sleep(kJobSettlementPollMs);
+  } while (true);
 
-  const bool passed = childExitCode == 0 && accounting.ActiveProcesses == 0 &&
-      accounting.TotalProcesses >= 1 && accounting.TotalTerminatedProcesses >= 1;
+  const bool passed = accountingQuerySucceeded && childExitCode == 0 && settled;
   std::printf(
       "{\"schemaVersion\":1,\"tool\":\"node-repl-win32-audit\",\"mode\":\"job-settlement\",\"status\":\"%s\","
       "\"targetCreatedSuspended\":true,\"targetAssignedToJob\":true,\"targetResumed\":true,"
-      "\"childExitCode\":%lu,\"activeProcesses\":%lu,\"totalProcesses\":%lu,\"totalTerminatedProcesses\":%lu}\n",
+      "\"childExitCode\":%lu,\"activeProcesses\":%lu,\"totalProcesses\":%lu,\"totalTerminatedProcesses\":%lu,"
+      "\"settlementDeadlineMs\":%lu}\n",
       passed ? "PASS" : "FAIL",
       static_cast<unsigned long>(childExitCode),
       static_cast<unsigned long>(accounting.ActiveProcesses),
       static_cast<unsigned long>(accounting.TotalProcesses),
-      static_cast<unsigned long>(accounting.TotalTerminatedProcesses));
+      static_cast<unsigned long>(accounting.TotalTerminatedProcesses),
+      static_cast<unsigned long>(kJobSettlementTimeoutMs));
   return passed ? 0 : 1;
 }
 
