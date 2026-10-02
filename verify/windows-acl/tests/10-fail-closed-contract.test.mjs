@@ -78,6 +78,11 @@ test('10: DSH reference baseline fails closed without an explicit clean source r
   assert.equal(evidence.failure.code, 'DSH_ROOT_REQUIRED')
 })
 
+test('10: DSH token snapshot fails closed without a DSH source root', { skip: !windowsOnly }, async () => {
+  const evidence = await runFailClosed('run-dsh-token-snapshot.mjs', '10-dsh-token-snapshot')
+  assert.equal(evidence.failure.code, 'DSH_ROOT_REQUIRED')
+})
+
 test('10: CI native artifact verifier fails closed without an exact artifact directory, source commit, and expected hash', { skip: !windowsOnly }, async () => {
   const evidence = await runFailClosed('../native/verify-artifact.mjs', '10-ci-native-audit-artifact')
   assert.equal(evidence.failure.code, 'NATIVE_AUDIT_ARTIFACT_INVALID')
