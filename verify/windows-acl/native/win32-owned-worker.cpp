@@ -152,6 +152,8 @@ struct ProbeResult {
   DWORD error = ERROR_SUCCESS;
   std::string phase;
   std::string targetReadyLine;
+  std::string childStdout;
+  std::string childStderr;
 };
 
 std::string jsonBool(bool value) { return value ? "true" : "false"; }
@@ -713,7 +715,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,"
       "\"jobCreated\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,"
-      "\"error\":%lu,\"phase\":\"%s\"}\n",
+      "\"error\":%lu,\"phase\":\"%s\",\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
       "node-repl-win32-owned-worker",
       jsonEscape(narrow(options.mode)).c_str(),
       status.c_str(),
@@ -732,7 +734,9 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.targetReady).c_str(),
       jsonBool(result.targetReportPass).c_str(),
       static_cast<unsigned long>(result.error),
-      jsonEscape(result.phase).c_str());
+      jsonEscape(result.phase).c_str(),
+      jsonEscape(result.childStdout).c_str(),
+      jsonEscape(result.childStderr).c_str());
   return result.pass ? 0 : 1;
 }
 
@@ -1050,6 +1054,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     stdoutDrain.join();
     stderrDrain.join();
+    result.childStdout = stdoutDrain.output;
+    result.childStderr = stderrDrain.output;
     stdoutDrain.handle.reset();
     stderrDrain.handle.reset();
     result.grantsRevokedAfterQuiescence = result.jobSettled;
