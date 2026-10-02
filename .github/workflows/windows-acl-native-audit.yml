@@ -70,9 +70,15 @@ jobs:
           $compilerVersion = (& cmd.exe /d /s /c "call `"$vcvars`" >nul && cl.exe 2>&1" | Select-Object -First 1).Trim()
           $sdkIncludeRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Include'
           $sdkVersion = if (Test-Path -LiteralPath $sdkIncludeRoot -PathType Container) {
-            (Get-ChildItem -LiteralPath $sdkIncludeRoot -Directory | Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name)
+            (Get-ChildItem -LiteralPath $sdkIncludeRoot -Directory |
+              Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } |
+              Sort-Object { [version]$_.Name } -Descending |
+              Select-Object -First 1 -ExpandProperty Name)
           } else {
             'unknown'
+          }
+          if ([string]::IsNullOrWhiteSpace($sdkVersion)) {
+            throw "No numeric Windows SDK include version was found below $sdkIncludeRoot"
           }
           $manifest = [ordered]@{
             schemaVersion = 1
@@ -102,7 +108,7 @@ jobs:
           $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $artifactDirectory 'manifest.json') -Encoding utf8
 
       - name: Upload short-retention evidence helper
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
         with:
           name: windows-acl-native-audit-${{ github.sha }}
           path: native-audit-artifact

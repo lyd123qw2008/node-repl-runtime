@@ -104,6 +104,8 @@ try {
     requireCondition(typeof manifest.sourceCommit === 'string' && /^[a-f0-9]{40}$/u.test(manifest.sourceCommit), 'Artifact manifest source commit is invalid.')
     requireCondition(typeof manifest.workflowRef === 'string' && manifest.workflowRef.includes('.github/workflows/windows-acl-native-audit.yml'), 'Artifact manifest workflow ref is unexpected.')
     requireCondition(manifest.runner?.os === 'Windows' && manifest.runner?.architecture === 'X64', 'Artifact was not built by the expected Windows x64 runner.')
+    requireCondition(typeof manifest.compiler?.version === 'string' && manifest.compiler.version.includes('Microsoft'), 'Artifact manifest does not identify the expected MSVC compiler.')
+    requireCondition(/^\d+\.\d+\.\d+\.\d+$/u.test(manifest.compiler?.windowsSdkVersion ?? ''), 'Artifact manifest does not identify a numeric Windows SDK version.')
     requireCondition(Array.isArray(manifest.selfTestModes) && expectedModes.every(mode => manifest.selfTestModes.includes(mode)), 'Artifact manifest omits a required self-test mode.')
     if (expectedCommit !== undefined) {
       requireCondition(/^[a-f0-9]{40}$/u.test(expectedCommit), 'NODE_REPL_VERIFY_NATIVE_AUDIT_COMMIT must be a full lowercase SHA-1 commit id.')
