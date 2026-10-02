@@ -11,7 +11,7 @@ SHA-256, and execute the three explicit modes.
 | --- | --- | --- |
 | `abi` | Windows-header `sizeof` / `offsetof` facts for the narrow records used by the planned launcher. | That a JavaScript/Koffi launcher uses those records correctly. |
 | `handle-sentinel` | An inheritable event listed in `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` reaches a child, while a second inheritable sentinel omitted from that list is invalid in the child. | That the future restricted Node target receives only that list, or that fd 4–7 are wired correctly. |
-| `job-settlement` | A target is created suspended, assigned to a private Job, resumed, exits, and the Job reports zero active processes. | Restricted-token ownership, final worker-tree settlement, or safe grant revocation in the future launcher. |
+| `job-settlement` | A target is created suspended, assigned to a private Job, resumed, exits, and the Job reports zero active processes under a bounded accounting poll. `TotalTerminatedProcesses` is diagnostic only because voluntary exit need not increment it. | Restricted-token ownership, final worker-tree settlement, or safe grant revocation in the future launcher. |
 
 The probe does **not** create a restricted token, apply a DACL/Low-integrity label,
 create workspace/private-temp grants, or operate as a sandbox launcher. A successful

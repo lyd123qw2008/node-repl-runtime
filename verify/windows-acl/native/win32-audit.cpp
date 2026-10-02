@@ -419,8 +419,10 @@ int runJobSettlement() {
       return failJson("job-settlement", "QueryInformationJobObject", GetLastError());
     }
     accountingQuerySucceeded = true;
-    settled = accounting.ActiveProcesses == 0 && accounting.TotalProcesses >= 1 &&
-        accounting.TotalTerminatedProcesses >= 1;
+    // TotalTerminatedProcesses is diagnostic only: voluntary normal child exit
+    // need not increase it. A signaled direct child plus zero active Job members
+    // is the bounded quiescence fact this helper can actually establish.
+    settled = accounting.ActiveProcesses == 0 && accounting.TotalProcesses >= 1;
     if (settled || GetTickCount64() >= settlementDeadline) break;
     Sleep(kJobSettlementPollMs);
   } while (true);
