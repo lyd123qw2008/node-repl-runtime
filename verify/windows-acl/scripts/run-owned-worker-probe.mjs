@@ -18,6 +18,7 @@ const nonClaims = [
   'This is a non-production owned-worker feasibility probe, not a runtime launcher.',
   'The probe establishes only the tested Windows ACL/token/Low/Job/fd/environment facts; it does not constrain network egress or ambient process visibility.',
   'Cell-created child processes remain subject to the owned Job but are not a general OS process-visibility policy.',
+  'Cell-owned child_process piped stdio may fail with EPERM on a Windows ACL restricted token; it is recorded as a known partial-boundary diagnostic, not claimed as supported.',
   'No result enables sandboxHost required or changes the production/default host.',
 ]
 
