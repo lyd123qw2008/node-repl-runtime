@@ -154,6 +154,7 @@ struct ProbeResult {
   std::string targetReadyLine;
   std::string childStdout;
   std::string childStderr;
+  DWORD targetExitCode = STILL_ACTIVE;
 };
 
 std::string jsonBool(bool value) { return value ? "true" : "false"; }
@@ -715,7 +716,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"crtDescriptorTable\":%s,"
       "\"jobCreated\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,"
-      "\"error\":%lu,\"phase\":\"%s\",\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
+      "\"error\":%lu,\"phase\":\"%s\",\"targetExitCode\":%lu,\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
       "node-repl-win32-owned-worker",
       jsonEscape(narrow(options.mode)).c_str(),
       status.c_str(),
@@ -735,6 +736,7 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.targetReportPass).c_str(),
       static_cast<unsigned long>(result.error),
       jsonEscape(result.phase).c_str(),
+      static_cast<unsigned long>(result.targetExitCode),
       jsonEscape(result.childStdout).c_str(),
       jsonEscape(result.childStderr).c_str());
   return result.pass ? 0 : 1;
@@ -1047,6 +1049,7 @@ int wmain(int argc, wchar_t** argv) {
       TerminateJobObject(job.get(), 1);
       WaitForSingleObject(targetProcess.get(), kExitTimeoutMs);
     }
+    GetExitCodeProcess(targetProcess.get(), &result.targetExitCode);
     result.jobSettled = queryJobSettled(job.get(), &result.jobSettled, &error) && result.jobSettled;
     if (!result.jobSettled && result.error == ERROR_SUCCESS) {
       result.error = error;

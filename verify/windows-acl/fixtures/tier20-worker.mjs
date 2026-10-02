@@ -3,6 +3,8 @@ import { fstatSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { Socket } from 'node:net'
 
+process.stderr.write('tier20-worker:start\\n')
+
 const CONTROL_FD = 7
 const PROTOCOL_VERSION = 1
 const mode = process.env.NODE_REPL_TIER20_MODE
