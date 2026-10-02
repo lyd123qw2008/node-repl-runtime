@@ -923,8 +923,10 @@ int wmain(int argc, wchar_t** argv) {
     startup.StartupInfo.hStdInput = stdinChild.get();
     startup.StartupInfo.hStdOutput = stdoutChild.get();
     startup.StartupInfo.hStdError = stderrChild.get();
-    startup.StartupInfo.cbReserved2 = static_cast<WORD>(descriptorBlock.size());
-    startup.StartupInfo.lpReserved2 = descriptorBlock.data();
+    // Diagnostic toggle: keep the target's CRT table disabled while isolating
+    // loader failures; the Tier 20 gate remains false until this is restored.
+    startup.StartupInfo.cbReserved2 = 0;
+    startup.StartupInfo.lpReserved2 = nullptr;
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION processInformation{};
     std::wstring commandLine = quoteWindowsArgument(targetNodePath) + L" " + quoteWindowsArgument(targetWorkerPath);
