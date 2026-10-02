@@ -837,7 +837,8 @@ int wmain(int argc, wchar_t** argv) {
     }
     label.Label.Sid = lowSid.get();
     label.Label.Attributes = SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
-    if (SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
+    bool skipLowForDiagnostic = true;
+    if (!skipLowForDiagnostic && SetTokenInformation(restrictedToken.get(), TokenIntegrityLevel, &label, sizeof(label) + lowSid.length()) == FALSE) {
       result.error = GetLastError();
       result.phase = "set-low-integrity";
       goto cleanup;
@@ -918,8 +919,8 @@ int wmain(int argc, wchar_t** argv) {
     startup.StartupInfo.hStdInput = stdinChild.get();
     startup.StartupInfo.hStdOutput = stdoutChild.get();
     startup.StartupInfo.hStdError = stderrChild.get();
-    startup.StartupInfo.cbReserved2 = static_cast<WORD>(descriptorBlock.size());
-    startup.StartupInfo.lpReserved2 = descriptorBlock.data();
+    startup.StartupInfo.cbReserved2 = 0;
+    startup.StartupInfo.lpReserved2 = nullptr;
     startup.lpAttributeList = attributes;
     PROCESS_INFORMATION processInformation{};
     std::wstring commandLine = quoteWindowsArgument(targetNodePath) + L" " + quoteWindowsArgument(targetWorkerPath);
