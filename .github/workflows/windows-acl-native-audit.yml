@@ -6,11 +6,18 @@ on:
       - ci/windows-acl-native-audit
     paths:
       - .github/workflows/windows-acl-native-audit.yml
-      - verify/windows-acl/native/**
+      - verify/windows-acl/native/verify-artifact.mjs
+      - verify/windows-acl/native/win32-audit.cpp
+      - verify/windows-acl/native/win32-owned-worker.cpp
+      - verify/windows-acl/fixtures/inspect-token-default-dacl.mjs
       - verify/windows-acl/fixtures/tier20-worker.mjs
+      - verify/windows-acl/scripts/run-dsh-token-snapshot.mjs
       - verify/windows-acl/scripts/run-owned-worker-probe.mjs
+      - verify/windows-acl/scripts/run-workspace-write-differential.mjs
       - verify/windows-acl/tests/**
       - verify/windows-acl/package.json
+      - verify/windows-acl/pnpm-lock.yaml
+      - verify/windows-acl/pnpm-workspace.yaml
   workflow_dispatch:
 
 permissions:
@@ -20,7 +27,7 @@ jobs:
   build:
     name: Build and self-test x64 audit probe
     runs-on: windows-2022
-    timeout-minutes: 10
+    timeout-minutes: 30
 
     steps:
       - name: Check out the exact source revision
@@ -180,5 +187,75 @@ jobs:
         with:
           name: windows-acl-tier20-owned-worker-${{ github.sha }}
           path: tier20-owned-worker-artifact
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Check out exact DSH ACL source reference
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dshRoot = Join-Path $env:RUNNER_TEMP 'node-repl-pinned-dsh-reference'
+          New-Item -ItemType Directory -Path $dshRoot -ErrorAction Stop | Out-Null
+          git -C $dshRoot init --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Could not initialize pinned DSH reference checkout' }
+          git -C $dshRoot remote add origin https://github.com/lyd123qw2008/deepseek-harness.git
+          if ($LASTEXITCODE -ne 0) { throw 'Could not configure pinned DSH reference remote' }
+          git -C $dshRoot fetch --quiet --depth=1 origin f9d6609d182969c9f57499ef552edb78835cc4e4
+          if ($LASTEXITCODE -ne 0) { throw 'Could not fetch pinned DSH reference commit' }
+          git -C $dshRoot checkout --quiet --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check out pinned DSH reference commit' }
+          $revision = (& git -C $dshRoot rev-parse HEAD).Trim()
+          if ($revision -ne 'f9d6609d182969c9f57499ef552edb78835cc4e4') { throw "Unexpected DSH source revision $revision" }
+          "Pinned DSH source: $revision"
+
+      - name: Install pinned DSH and verifier dependencies
+        shell: pwsh
+        env:
+          CI: 'true'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dshRoot = Join-Path $env:RUNNER_TEMP 'node-repl-pinned-dsh-reference'
+          Push-Location $dshRoot
+          try {
+            corepack pnpm install --filter '@deepseek-ai/dsh-sandbox-windows-acl...' --filter '@deepseek-ai/dsh-root' --frozen-lockfile --prefer-offline
+            if ($LASTEXITCODE -ne 0) { throw 'Pinned DSH dependency install failed' }
+          } finally {
+            Pop-Location
+          }
+          $verifierRoot = Join-Path $env:GITHUB_WORKSPACE 'verify\windows-acl'
+          Push-Location $verifierRoot
+          try {
+            corepack pnpm install --frozen-lockfile
+            if ($LASTEXITCODE -ne 0) { throw 'Windows ACL verifier dependency install failed' }
+          } finally {
+            Pop-Location
+          }
+
+      - name: Run one-shot Node 22.19 A1-A5 differential
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tier20Evidence = Join-Path $env:RUNNER_TEMP 'node-repl-tier20-evidence'
+          $buildOutput = Join-Path $env:RUNNER_TEMP 'node-repl-win32-owned-worker-build\node-repl-win32-owned-worker.exe'
+          $env:NODE_REPL_VERIFY_TIER20_NATIVE = $buildOutput
+          $env:NODE_REPL_VERIFY_NODE = (Get-Command node.exe).Source
+          $env:NODE_REPL_VERIFY_OUT = $tier20Evidence
+          $env:NODE_REPL_VERIFY_DSH_ROOT = Join-Path $env:RUNNER_TEMP 'node-repl-pinned-dsh-reference'
+          $matrixArtifact = Join-Path $env:RUNNER_TEMP 'node-repl-workspace-write-differential-artifact'
+          New-Item -ItemType Directory -Force -Path $matrixArtifact | Out-Null
+          & node (Join-Path $env:GITHUB_WORKSPACE 'verify\windows-acl\scripts\run-workspace-write-differential.mjs')
+          $matrixExit = $LASTEXITCODE
+          $matrixEvidence = Join-Path $tier20Evidence '20-workspace-write-differential\evidence.json'
+          $dshEvidence = Join-Path $tier20Evidence '10-dsh-token-snapshot\evidence.json'
+          if (Test-Path -LiteralPath $matrixEvidence -PathType Leaf) { Copy-Item -LiteralPath $matrixEvidence -Destination $matrixArtifact -Force }
+          if (Test-Path -LiteralPath $dshEvidence -PathType Leaf) { Copy-Item -LiteralPath $dshEvidence -Destination $matrixArtifact -Force }
+          if ($matrixExit -ne 0) { throw "A1-A5 matrix was inconclusive (exit $matrixExit); inspect the uploaded evidence." }
+
+      - name: Upload one-shot DSH differential evidence
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5
+        with:
+          name: windows-acl-workspace-write-differential-${{ github.sha }}
+          path: ${{ runner.temp }}\node-repl-workspace-write-differential-artifact
           if-no-files-found: warn
           retention-days: 7

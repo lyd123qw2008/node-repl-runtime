@@ -170,6 +170,10 @@ struct Options {
   std::wstring worker;
   std::wstring workspace;
   std::wstring privateTemp;
+  // Diagnostic-only selectors for the bounded A1-A5 matrix; defaults retain the original probe path.
+  DWORD defaultDaclInheritance = 0;
+  bool addWorldDefaultAce = true;
+  bool inheritEnvironment = false;
 };
 
 struct ProbeResult {
@@ -573,7 +577,7 @@ bool queryLowLabel(const std::wstring& path, PSID lowSid, bool* present, DWORD* 
   return true;
 }
 
-bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, PSID additionalWorldSid, DWORD* error) {
+bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, PSID additionalWorldSid, DWORD inheritanceFlags, DWORD* error) {
   DWORD bytes = 0;
   GetTokenInformation(token, TokenDefaultDacl, nullptr, 0, &bytes);
   if (bytes == 0) {
@@ -587,7 +591,7 @@ bool setTokenDefaultDaclGrant(HANDLE token, PSID grantSid, PSID additionalWorldS
   }
   auto* currentDacl = reinterpret_cast<PTOKEN_DEFAULT_DACL>(current.data());
   std::array<EXPLICIT_ACCESSW, 2> entries{};
-  setExplicitAccess(&entries[0], grantSid, FILE_ALL_ACCESS, GRANT_ACCESS, 0);
+  setExplicitAccess(&entries[0], grantSid, FILE_ALL_ACCESS, GRANT_ACCESS, inheritanceFlags);
   ULONG entryCount = 1;
   if (additionalWorldSid != nullptr && EqualSid(additionalWorldSid, grantSid) == FALSE) {
     setExplicitAccess(&entries[entryCount++], additionalWorldSid, FILE_ALL_ACCESS, GRANT_ACCESS, 0);
@@ -780,6 +784,7 @@ std::vector<wchar_t> explicitEnvironment(const Options& options) {
   values.emplace_back(L"NODE_REPL_TIER20_MODE", options.mode);
   values.emplace_back(L"NODE_REPL_TIER20_WORKSPACE", options.workspace);
   values.emplace_back(L"NODE_REPL_TIER20_PRIVATE_TEMP", options.privateTemp);
+  values.emplace_back(L"NODE_REPL_TIER20_ENVIRONMENT_POLICY", L"explicit");
   std::sort(values.begin(), values.end(), [](const auto& left, const auto& right) {
     return CompareStringOrdinal(left.first.data(), static_cast<int>(left.first.size()), right.first.data(), static_cast<int>(right.first.size()), TRUE) == CSTR_LESS_THAN;
   });
@@ -1069,6 +1074,20 @@ bool parseArgs(int argc, wchar_t** argv, Options* options, DWORD* error) {
       if (!next(&options->workspace)) { *error = ERROR_INVALID_PARAMETER; return false; }
     } else if (argument == L"--private-temp") {
       if (!next(&options->privateTemp)) { *error = ERROR_INVALID_PARAMETER; return false; }
+    } else if (argument == L"--default-dacl-inheritance") {
+      std::wstring value;
+      if (!next(&value) || (value != L"0" && value != L"3")) { *error = ERROR_INVALID_PARAMETER; return false; }
+      options->defaultDaclInheritance = value == L"3"
+          ? static_cast<DWORD>(OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)
+          : DWORD{0};
+    } else if (argument == L"--default-dacl-world-ace") {
+      std::wstring value;
+      if (!next(&value) || (value != L"yes" && value != L"no")) { *error = ERROR_INVALID_PARAMETER; return false; }
+      options->addWorldDefaultAce = value == L"yes";
+    } else if (argument == L"--environment") {
+      std::wstring value;
+      if (!next(&value) || (value != L"explicit" && value != L"inherit")) { *error = ERROR_INVALID_PARAMETER; return false; }
+      options->inheritEnvironment = value == L"inherit";
     } else {
       *error = ERROR_INVALID_PARAMETER;
       return false;
@@ -1085,8 +1104,8 @@ int printResult(const Options& options, const ProbeResult& result) {
   const std::string status = result.pass ? "PASS" : "FAIL";
   std::printf(
       "{\"schemaVersion\":2,\"tool\":\"%s\",\"mode\":\"%s\",\"status\":\"%s\","
-      "\"tokenRestricted\":%s,\"restrictedSidSetExact\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"daclInspector\":%s,\"protectedDaclVerified\":%s,\"worldWriteDeleteDenied\":%s,\"workspaceGrantMaskVerified\":%s,\"tempGrantMaskVerified\":%s,\"unrelatedCapabilityAbsent\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,\"defaultDaclWorldGrant\":%s,\"defaultDaclAces\":%s,"
-      "\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"controlHandlePipe\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
+      "\"tokenRestricted\":%s,\"restrictedSidSetExact\":%s,\"tokenLowIntegrity\":%s,\"daclApplied\":%s,\"daclInspector\":%s,\"protectedDaclVerified\":%s,\"worldWriteDeleteDenied\":%s,\"workspaceGrantMaskVerified\":%s,\"tempGrantMaskVerified\":%s,\"unrelatedCapabilityAbsent\":%s,\"lowLabelApplied\":%s,\"defaultDaclGrant\":%s,\"defaultDaclWorldGrant\":%s,\"defaultDaclAces\":%s,\"defaultDaclInheritanceFlags\":%lu,\"additionalWorldDefaultAce\":%s,"
+      "\"environmentMode\":\"%s\",\"explicitEnvironmentBlock\":%s,\"handleAllowlist\":%s,\"controlHandlePipe\":%s,\"crtDescriptorTable\":%s,\"fd3RoundTrip\":%s,\"carrierReads\":%s,"
       "\"jobCreated\":%s,\"targetProcessCreated\":%s,\"targetProcessExited\":%s,\"targetAssignedToJob\":%s,\"targetResumed\":%s,\"jobSettled\":%s,"
       "\"grantsRevokedAfterQuiescence\":%s,\"cleanup\":%s,\"targetReady\":%s,\"targetReportPass\":%s,\"targetExitSuccess\":%s,"
       "\"error\":%lu,\"phase\":\"%s\",\"targetExitCode\":%lu,\"targetReadyLine\":\"%s\",\"childStdout\":\"%s\",\"childStderr\":\"%s\"}\n",
@@ -1107,6 +1126,9 @@ int printResult(const Options& options, const ProbeResult& result) {
       jsonBool(result.defaultDaclGrant).c_str(),
       jsonBool(result.defaultDaclWorldGrant).c_str(),
       result.defaultDaclAcesJson.c_str(),
+      static_cast<unsigned long>(options.defaultDaclInheritance),
+      jsonBool(options.addWorldDefaultAce).c_str(),
+      options.inheritEnvironment ? "inherit" : "explicit",
       jsonBool(result.explicitEnvironmentBlock).c_str(),
       jsonBool(result.handleAllowlist).c_str(),
       jsonBool(result.controlHandlePipe).c_str(),
@@ -1134,7 +1156,7 @@ int printResult(const Options& options, const ProbeResult& result) {
 }
 
 int usage() {
-  std::fwprintf(stderr, L"Usage: %ls --mode <read-only|workspace-write> --node <node.exe> --worker <worker.mjs> --workspace <root> --private-temp <root>\n", kToolName);
+  std::fwprintf(stderr, L"Usage: %ls --mode <read-only|workspace-write> --node <node.exe> --worker <worker.mjs> --workspace <root> --private-temp <root> [--default-dacl-inheritance <0|3>] [--default-dacl-world-ace <yes|no>] [--environment <explicit|inherit>]\n", kToolName);
   return 64;
 }
 
@@ -1147,9 +1169,23 @@ int wmain(int argc, wchar_t** argv) {
 
   ProbeResult result;
   result.phase = "initialization";
-  if (SetEnvironmentVariableW(L"NODE_REPL_PHASE0_PARENT_SENTINEL", L"must-not-reach-worker") == FALSE ||
-      SetEnvironmentVariableW(L"DSH_SUBPROCESS_CONTROL", L"must-not-reach-worker") == FALSE ||
-      SetEnvironmentVariableW(L"NODE_OPTIONS", L"--no-warnings") == FALSE) {
+  if (options.inheritEnvironment) {
+    if (SetEnvironmentVariableW(L"NODE_REPL_PHASE0_PARENT_SENTINEL", nullptr) == FALSE ||
+        SetEnvironmentVariableW(L"DSH_SUBPROCESS_CONTROL", nullptr) == FALSE ||
+        SetEnvironmentVariableW(L"TMP", options.privateTemp.c_str()) == FALSE ||
+        SetEnvironmentVariableW(L"TEMP", options.privateTemp.c_str()) == FALSE ||
+        SetEnvironmentVariableW(L"NODE_REPL_KERNEL_CONTROL", L"pipe") == FALSE ||
+        SetEnvironmentVariableW(L"NODE_REPL_TIER20_MODE", options.mode.c_str()) == FALSE ||
+        SetEnvironmentVariableW(L"NODE_REPL_TIER20_WORKSPACE", options.workspace.c_str()) == FALSE ||
+        SetEnvironmentVariableW(L"NODE_REPL_TIER20_PRIVATE_TEMP", options.privateTemp.c_str()) == FALSE ||
+        SetEnvironmentVariableW(L"NODE_REPL_TIER20_ENVIRONMENT_POLICY", L"inherit") == FALSE) {
+      result.error = GetLastError();
+      result.phase = "prepare-inherited-environment";
+      return printResult(options, result);
+    }
+  } else if (SetEnvironmentVariableW(L"NODE_REPL_PHASE0_PARENT_SENTINEL", L"must-not-reach-worker") == FALSE ||
+             SetEnvironmentVariableW(L"DSH_SUBPROCESS_CONTROL", L"must-not-reach-worker") == FALSE ||
+             SetEnvironmentVariableW(L"NODE_OPTIONS", L"--no-warnings") == FALSE) {
     result.error = GetLastError();
     result.phase = "prepare-environment-sentinels";
     return printResult(options, result);
@@ -1360,8 +1396,8 @@ int wmain(int argc, wchar_t** argv) {
       goto cleanup;
     }
     PSID defaultDaclCapability = options.mode == L"workspace-write" ? tempCapabilitySid.get() : worldSid.get();
-    PSID defaultDaclWorldSid = options.mode == L"workspace-write" ? worldSid.get() : nullptr;
-    if (!setTokenDefaultDaclGrant(restrictedToken.get(), defaultDaclCapability, defaultDaclWorldSid, &error)) {
+    PSID defaultDaclWorldSid = options.mode == L"workspace-write" && options.addWorldDefaultAce ? worldSid.get() : nullptr;
+    if (!setTokenDefaultDaclGrant(restrictedToken.get(), defaultDaclCapability, defaultDaclWorldSid, options.defaultDaclInheritance, &error)) {
       result.error = error;
       result.phase = "set-default-dacl";
       goto cleanup;
@@ -1457,7 +1493,7 @@ int wmain(int argc, wchar_t** argv) {
     std::vector<wchar_t> mutableCommand(commandLine.begin(), commandLine.end());
     mutableCommand.push_back(L'\0');
 
-    result.explicitEnvironmentBlock = true;
+    result.explicitEnvironmentBlock = !options.inheritEnvironment;
     DWORD creationFlags = EXTENDED_STARTUPINFO_PRESENT | CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW | CREATE_SUSPENDED;
     if (CreateProcessAsUserW(
             restrictedToken.get(),
@@ -1467,7 +1503,7 @@ int wmain(int argc, wchar_t** argv) {
             nullptr,
             TRUE,
             creationFlags,
-            environment.data(),
+            options.inheritEnvironment ? nullptr : environment.data(),
             options.workspace.c_str(),
             &startup.StartupInfo,
             &processInformation) == FALSE) {
@@ -1667,7 +1703,9 @@ cleanup:
       result.phase = quiescent ? "cleanup" : "cleanup-before-quiescence";
     }
   }
-  result.pass = result.daclApplied && result.daclInspector && result.protectedDaclVerified && result.worldWriteDeleteDenied && result.workspaceGrantMaskVerified && result.tempGrantMaskVerified && result.unrelatedCapabilityAbsent && result.lowLabelApplied && result.defaultDaclGrant && result.defaultDaclWorldGrant && result.tokenRestricted && result.restrictedSidSetExact && result.tokenLow && result.explicitEnvironmentBlock && result.handleAllowlist && result.controlHandlePipe &&
+  const bool expectedWorldDefaultAce = options.mode == L"read-only" || options.addWorldDefaultAce;
+  const bool expectedEnvironmentProof = options.inheritEnvironment ? !result.explicitEnvironmentBlock : result.explicitEnvironmentBlock;
+  result.pass = result.daclApplied && result.daclInspector && result.protectedDaclVerified && result.worldWriteDeleteDenied && result.workspaceGrantMaskVerified && result.tempGrantMaskVerified && result.unrelatedCapabilityAbsent && result.lowLabelApplied && result.defaultDaclGrant && (!expectedWorldDefaultAce || result.defaultDaclWorldGrant) && result.tokenRestricted && result.restrictedSidSetExact && result.tokenLow && expectedEnvironmentProof && result.handleAllowlist && result.controlHandlePipe &&
       result.crtDescriptorTable && result.fd3RoundTrip && result.carrierReads && result.jobCreated && result.targetProcessCreated && result.targetProcessExited && result.targetAssignedToJob && result.targetResumed && result.jobSettled &&
       result.grantsRevokedAfterQuiescence && result.cleanup && result.targetReady && result.targetReportPass && result.targetExitSuccess;
   if (result.pass) result.phase = "complete";

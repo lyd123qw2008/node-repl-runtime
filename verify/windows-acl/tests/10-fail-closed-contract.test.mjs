@@ -83,6 +83,25 @@ test('10: DSH token snapshot fails closed without a DSH source root', { skip: !w
   assert.equal(evidence.failure.code, 'DSH_ROOT_REQUIRED')
 })
 
+test('20: workspace-write differential fails closed without the complete A1-A5 inputs', { skip: !windowsOnly }, async () => {
+  const outputRoot = await mkdtemp(join(tmpdir(), 'node-repl-phase0-workspace-write-matrix-'))
+  try {
+    const result = spawnSync(process.execPath, [join(verifierRoot, 'scripts', 'run-workspace-write-differential.mjs')], {
+      cwd: verifierRoot,
+      env: childEnvironment(outputRoot),
+      encoding: 'utf8',
+      windowsHide: true,
+    })
+    assert.equal(result.status, 2)
+    const evidence = JSON.parse(await readFile(join(outputRoot, '20-workspace-write-differential', 'evidence.json'), 'utf8'))
+    assert.equal(evidence.status, 'MATRIX_INCONCLUSIVE')
+    assert.equal(evidence.releaseEligible, false)
+    assert.match(evidence.failure, /exact native executable, pinned DSH root, and evidence output root/u)
+  } finally {
+    await rm(outputRoot, { recursive: true, force: true })
+  }
+})
+
 test('10: CI native artifact verifier fails closed without an exact artifact directory, source commit, and expected hash', { skip: !windowsOnly }, async () => {
   const evidence = await runFailClosed('../native/verify-artifact.mjs', '10-ci-native-audit-artifact')
   assert.equal(evidence.failure.code, 'NATIVE_AUDIT_ARTIFACT_INVALID')

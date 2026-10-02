@@ -16,7 +16,8 @@
     "verify:reference:ci-native-audit": "node ./native/verify-artifact.mjs",
     "verify:preflight": "node ./scripts/run-native-preflight.mjs",
     "verify:preflight:report": "node ./scripts/run-native-preflight.mjs --report-only",
-    "verify:tier20:owned-worker": "node ./scripts/run-owned-worker-probe.mjs"
+    "verify:tier20:owned-worker": "node ./scripts/run-owned-worker-probe.mjs",
+    "verify:tier20:workspace-write-differential": "node ./scripts/run-workspace-write-differential.mjs"
   },
   "dependencies": {
     "koffi": "3.1.1"

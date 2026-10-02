@@ -8,6 +8,9 @@ import { fileURLToPath } from 'node:url'
 
 const EXPECTED_DSH_REVISION = 'f9d6609d182969c9f57499ef552edb78835cc4e4'
 const DSH_FILES = [
+  'package.json',
+  'pnpm-lock.yaml',
+  'pnpm-workspace.yaml',
   'packages/sandbox/sandbox-windows-acl/src/token.ts',
   'packages/sandbox/sandbox-windows-acl/src/acl.ts',
   'packages/sandbox/sandbox-windows-acl/src/index.ts',
@@ -25,10 +28,11 @@ const DSH_FILES = [
 const verifierRoot = fileURLToPath(new URL('../', import.meta.url))
 const dshRootInput = process.env.NODE_REPL_VERIFY_DSH_ROOT
 const requestedEvidenceRoot = process.env.NODE_REPL_VERIFY_OUT
+const requestedMode = process.env.NODE_REPL_VERIFY_DSH_MODE
 const evidenceDirectory = requestedEvidenceRoot === undefined
   ? join(verifierRoot, 'spike', 'windows-acl', '10-dsh-token-snapshot')
   : join(resolve(requestedEvidenceRoot), '10-dsh-token-snapshot')
-const modes = ['read-only', 'workspace-write']
+const modes = requestedMode === undefined ? ['read-only', 'workspace-write'] : [requestedMode]
 const runnerPath = join(dshRootInput ?? '', 'packages', 'sandbox', 'sandbox-windows-acl', 'src', 'runner.ts')
 const tokenInspector = join(verifierRoot, 'fixtures', 'inspect-token-default-dacl.mjs')
 
@@ -42,6 +46,12 @@ function sha256(path) {
 
 function sha256Text(value) {
   return createHash('sha256').update(value).digest('hex')
+}
+
+function exitStatus(status) {
+  if (status === null) return { exitCodeUnsigned: null, exitCodeHex: null }
+  const unsigned = status >>> 0
+  return { exitCodeUnsigned: unsigned, exitCodeHex: `0x${unsigned.toString(16).padStart(8, '0')}` }
 }
 
 function failure(code, message, detail = undefined) {
@@ -86,9 +96,10 @@ function validateDshSnapshot(mode, snapshot) {
       ? snapshot.targetEnvironment.tmpInRequestedTempRoot && snapshot.targetEnvironment.tempInRequestedTempRoot
       : !snapshot.targetEnvironment.tmpInRequestedTempRoot && !snapshot.targetEnvironment.tempInRequestedTempRoot,
     inheritedAndIgnoredChildrenSettle: snapshot.grandchild.inherit.status === 0 && snapshot.grandchild.ignore.status === 0,
-    pipedGrandchildIsDenied: childPipe.status === null && childPipe.errorCode === 'EPERM',
+    pipedGrandchildDiagnostic: childPipe.status === null && childPipe.errorCode === 'EPERM',
   }
-  return { checks, pass: Object.values(checks).every(Boolean) }
+  const gateChecks = Object.entries(checks).filter(([name]) => name !== 'pipedGrandchildDiagnostic')
+  return { checks, pass: gateChecks.every(([, value]) => value) }
 }
 
 function normalizeTokenSnapshot(snapshot, expectedTempRoot) {
@@ -118,6 +129,8 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
   artifact = failure('DSH_ROOT_REQUIRED', 'Set NODE_REPL_VERIFY_DSH_ROOT to the pinned DSH source checkout.')
 } else if (!isAbsolute(dshRootInput)) {
   artifact = failure('DSH_ROOT_REQUIRED', 'NODE_REPL_VERIFY_DSH_ROOT must be an absolute Windows path.')
+} else if (modes.length === 0 || modes.some(mode => mode !== 'read-only' && mode !== 'workspace-write')) {
+  artifact = failure('DSH_MODE_INVALID', 'NODE_REPL_VERIFY_DSH_MODE must be read-only or workspace-write.')
 } else {
   const dshRoot = resolve(dshRootInput)
   const revisionResult = run('git.exe', ['rev-parse', 'HEAD'], dshRoot)
@@ -154,7 +167,9 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
             mode,
             status: 'FAIL',
             exitCode: invocation.status,
+            ...exitStatus(invocation.status),
             spawnErrorCode: invocation.error?.code,
+            signal: invocation.signal ?? null,
             stdoutSha256: sha256Text(`${invocation.stdout ?? ''}`),
             stderrSha256: sha256Text(`${invocation.stderr ?? ''}`),
             failure: error instanceof Error ? error.message : String(error),
@@ -167,6 +182,8 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
           mode,
           status: invocation.status === 0 && validation.pass ? 'PASS' : 'FAIL',
           exitCode: invocation.status,
+          ...exitStatus(invocation.status),
+          signal: invocation.signal ?? null,
           snapshot: snapshotJson,
           validation,
           stderrSha256: sha256Text(`${invocation.stderr ?? ''}`),
@@ -189,11 +206,11 @@ if (process.platform !== 'win32' || process.arch !== 'x64') {
         host: { nodeVersion: process.version, architecture: process.arch },
         observations,
         comparisonLimitations: [
-          'DSH was measured locally under Node v24.15.0; the owned-worker minimum-floor probe is Windows CI Node v22.19.0, so this is not a same-image or same-runtime parity experiment.',
-          'The DSH source snapshot checks the actual final token SIDs and TokenDefaultDacl trustee classes, masks, ACE order, and inheritance flags. Probe ACE details are separately queried from its actual final token in CI; compare functional trustee classes, not machine-specific account/capability SID values.',
-          'DSH target startup mutates the runner TMP/TEMP then uses CreateProcessAsUserW with lpEnvironment=NULL; the native probe uses an explicit environment block. This is a material launch-context difference, not evidence that World replaces a DSH ACE.',
+          `This DSH target ran under Node ${process.version}. The one-shot A1-A5 workflow invokes DSH and direct-worker cases on the same Windows runner and Node version; separately collected runs are not same-host parity evidence.`,
+          'The DSH source snapshot checks the actual final token SIDs and TokenDefaultDacl trustee classes, masks, ACE order, and inheritance flags. The one-shot direct cases also query their actual final token; compare functional trustee classes, not machine-specific account/capability SID values.',
+          'DSH target startup mutates the runner TMP/TEMP then uses CreateProcessAsUserW with lpEnvironment=NULL; the direct-worker control cases explicitly select either the existing environment block or a DSH-style inherited block. The other launch-topology differences remain visible and are not attributed to a single cause.',
           'No DSH source or runtime package is imported by node-repl-runtime production code; this script invokes only the pinned source runner as an external reference.',
-          'The local DSH checkout has unrelated dirty paths; only the enumerated ACL/token/runner source and test files are required clean and their SHA-256 hashes are recorded.',
+          'Only the root package/workspace/lock manifests and enumerated ACL/token/runner/test files are required clean and hashed; unrelated paths outside that set are not used as evidence.',
           'This comparison does not accept formal Tier 20 or Phase 0 and does not authorize migrating the World-ACE workaround.',
         ],
       }

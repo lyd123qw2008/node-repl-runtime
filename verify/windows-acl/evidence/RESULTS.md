@@ -67,12 +67,16 @@ are not waived by a reference pass.
 
 ### Pinned DSH token/default-DACL comparison
 
-The added `run-dsh-token-snapshot.mjs` reference launched the exact pinned DSH ACL runner
+The initial `run-dsh-token-snapshot.mjs` reference launched the exact pinned DSH ACL runner
 on local Windows x64 / Node `v24.15.0` in both modes, then queried the actual final token's
-restricting-SID set, Low integrity, and ordered `TokenDefaultDacl` ACEs. Source/test files
-used by the experiment were individually clean at DSH revision
-`f9d6609d182969c9f57499ef552edb78835cc4e4`; unrelated paths in that checkout were dirty,
-so their hashes are recorded and the checkout is not described as wholly clean.
+restricting-SID set, Low integrity, and ordered `TokenDefaultDacl` ACEs. The selected ACL /
+token / runner / test source files were clean at DSH revision
+`f9d6609d182969c9f57499ef552edb78835cc4e4`, but that caller worktree had unrelated changes
+including the lockfile; the initial dependency install was therefore not claimed as wholly
+clean or lock-pinned. In round 2, a fresh detached clone at the same revision completed a
+frozen `pnpm@11.7.0` install and a workspace-write-only Node `v24.15.0` snapshot. The current
+runner now hashes and requires the root package/workspace/lock manifests clean as well as
+the ACL/token/runner/test source set.
 
 Observed DSH default-DACL ACE at index 0: read-only grants World `FILE_ALL_ACCESS`
 (`0x001f01ff`); workspace-write grants the private-temp capability the same mask and has
@@ -92,6 +96,24 @@ flags, environment construction, launch path, and Node/runner context. Local DSH
 does not identify why the earlier hosted Node `v22.19.0` probe required its extra World
 ACE. No replacement ACL recipe is inferred; see
 [DSH-COMPARISON.md](DSH-COMPARISON.md) for the exact source and test matrix.
+
+### Bounded A1–A5 workspace-write differential (single CI run)
+
+The next and only planned compatibility experiment is one sequential matrix on one
+`windows-2022` runner under Node `v22.19.0`; the DSH source is fetched at pinned revision
+`f9d6609d182969c9f57499ef552edb78835cc4e4` and installed with its frozen lockfile. A1 runs
+the real DSH workspace-write runner. A2 and A3 reuse the existing direct Tier 20 worker,
+changing only (respectively) the temp ACE flags to `0x03` or the environment API to
+DSH-style parent inheritance. A4 is temp-only / flags 0 / explicit-environment failure
+control. A5 is the existing temp+World / flags 0 / explicit-environment pass control
+from the same job. No new ACL/Job/handle mechanism is added; the diagnostic selector
+defaults preserve the old probe path.
+
+The matrix is valid only if A4 reproduces Node status `0xC0000142` and A5 passes. A1/A2/A3
+outcomes are interpreted exactly by the user stop rule. No retry or second guessed ACL
+variant will follow an inconclusive or completed matrix. Cell-owned piped stdio is not in
+any go/no-go predicate. Until the artifact is inspected, this experiment changes no
+acceptance state and authorizes no product workaround.
 
 ## CI-built native audit reference
 

@@ -26,8 +26,8 @@ package, workspace link, or deep source import is used.
 | Component | Source | License | Role |
 | --- | --- | --- | --- |
 | `native/win32-audit.cpp`, `native/verify-artifact.mjs` | This repository | MIT | Independently authored Windows x64 ABI / helper-only handle-list sentinel / helper-only Job-accounting oracle. Never a runtime launcher. |
-| `native/win32-owned-worker.cpp`, `fixtures/tier20-worker.mjs`, `scripts/run-owned-worker-probe.mjs`, fail-closed contract test | This repository | MIT | Independently authored non-production Tier 20 owned-worker feasibility probe; it uses Win32 APIs and Node built-ins, not DSH runtime packages or copied DSH source. |
-| `.github/workflows/windows-acl-native-audit.yml` | This repository | MIT | Pinned `windows-2022` GitHub Actions compilation, self-test, manifest, minimum-Node check, and short-retention artifacts for Tier 10 and Tier 20 probes. |
+| `native/win32-owned-worker.cpp`, `fixtures/tier20-worker.mjs`, `scripts/run-owned-worker-probe.mjs`, `scripts/run-workspace-write-differential.mjs`, fail-closed contract test | This repository | MIT | Independently authored non-production Tier 20 owned-worker feasibility probe plus one bounded A1–A5 diagnostic matrix; the native selectors are test-only and default to the original launcher behavior. |
+| `.github/workflows/windows-acl-native-audit.yml` | This repository | MIT | Pinned `windows-2022` compilation/self-tests plus one same-job Node `v22.19.0` A1–A5 workspace-write differential and short-retention probe/reference artifacts; no DSH source is committed or modified. |
 | Windows SDK headers and MSVC compiler | GitHub-hosted Windows runner | Microsoft license / runner image terms | Compile the ABI helper and non-production Win32 worker probe; no SDK/runtime payload is copied into this repository. |
 | `actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09`, `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020`, `actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4` | GitHub Actions | Action-specific upstream licenses | SHA-pinned CI checkout, Node 22.19.0 minimum-floor install, and artifact transfer actions. |
 
@@ -52,8 +52,9 @@ node-repl-runtime imports no DSH package and records reference-only results:
   DSH child token's restricted SIDs, Low integrity, ordered default-DACL ACE
   trustee classes/masks/flags, TMP/TEMP facts, and child-stdio outcomes. The
   wrapper pins DSH revision `f9d6609d182969c9f57499ef552edb78835cc4e4`, requires
-  the enumerated ACL/token/runner/test source files to be clean, and records their
-  SHA-256 hashes. Raw evidence is written only outside Git.
+  the root package/workspace/lock manifests and enumerated ACL/token/runner/test source
+  files to be clean, and records their SHA-256 hashes. Raw evidence is written only
+  outside Git.
 - `evidence/DSH-COMPARISON.md` — interpretation and source/topology differences;
   it does not identify an unproven root cause or endorse the probe World ACE.
 
