@@ -43,6 +43,10 @@ namespace {
 
 constexpr wchar_t kToolName[] = L"node-repl-win32-audit";
 constexpr DWORD kChildTimeoutMs = 10'000;
+// The child deliberately starts with only one inherited test handle. Reserving
+// high-numbered parent handle slots before creating the sentinel keeps an omitted
+// sentinel slot from being spuriously reused by ordinary child initialization.
+constexpr size_t kSentinelReservationCount = 4'096;
 
 class ScopedHandle {
  public:
@@ -52,8 +56,20 @@ class ScopedHandle {
   ScopedHandle(const ScopedHandle&) = delete;
   ScopedHandle& operator=(const ScopedHandle&) = delete;
 
+  ScopedHandle(ScopedHandle&& other) noexcept : handle_(other.release()) {}
+  ScopedHandle& operator=(ScopedHandle&& other) noexcept {
+    if (this != &other) reset(other.release());
+    return *this;
+  }
+
   HANDLE get() const { return handle_; }
   bool valid() const { return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE; }
+
+  HANDLE release() {
+    HANDLE released = handle_;
+    handle_ = nullptr;
+    return released;
+  }
 
   void reset(HANDLE replacement = nullptr) {
     if (valid()) {
@@ -213,16 +229,23 @@ int runHandleChild(int argc, wchar_t** argv) {
   const bool sentinelSignaled = SetEvent(sentinel) != FALSE;
   const DWORD sentinelSignalError = sentinelSignaled ? ERROR_SUCCESS : GetLastError();
 
-  const bool passed = allowedVisible && allowedSignaled && !sentinelVisible &&
-      sentinelVisibleError == ERROR_INVALID_HANDLE && !sentinelSignaled &&
-      sentinelSignalError == ERROR_INVALID_HANDLE;
+  // Exit subcodes let the parent distinguish a real omitted-sentinel failure
+  // from an allowed-handle failure even though stdout itself is intentionally not
+  // part of the child handle allowlist.
+  const int exitCode = !allowedVisible ? 10
+      : !allowedSignaled ? 11
+      : sentinelVisible ? 12
+      : sentinelVisibleError != ERROR_INVALID_HANDLE ? 13
+      : sentinelSignaled ? 14
+      : sentinelSignalError != ERROR_INVALID_HANDLE ? 15
+      : 0;
 
   std::printf(
       "{\"schemaVersion\":1,\"tool\":\"node-repl-win32-audit\",\"mode\":\"handle-child\",\"status\":\"%s\","
       "\"allowedVisible\":%s,\"allowedSignaled\":%s,\"allowedVisibleError\":%lu,"
       "\"allowedSignalError\":%lu,\"sentinelVisible\":%s,\"sentinelSignaled\":%s,"
       "\"sentinelVisibleError\":%lu,\"sentinelSignalError\":%lu}\n",
-      passed ? "PASS" : "FAIL",
+      exitCode == 0 ? "PASS" : "FAIL",
       allowedVisible ? "true" : "false",
       allowedSignaled ? "true" : "false",
       static_cast<unsigned long>(allowedVisibleError),
@@ -231,7 +254,7 @@ int runHandleChild(int argc, wchar_t** argv) {
       sentinelSignaled ? "true" : "false",
       static_cast<unsigned long>(sentinelVisibleError),
       static_cast<unsigned long>(sentinelSignalError));
-  return passed ? 0 : 1;
+  return exitCode;
 }
 
 int runHandleSentinel() {
@@ -241,6 +264,16 @@ int runHandleSentinel() {
 
   ScopedHandle allowed(CreateEventW(&inheritable, TRUE, FALSE, nullptr));
   if (!allowed.valid()) return failJson("handle-sentinel", "CreateEventW-allowed", GetLastError());
+
+  std::vector<ScopedHandle> reservedParentHandles;
+  reservedParentHandles.reserve(kSentinelReservationCount);
+  for (size_t index = 0; index < kSentinelReservationCount; ++index) {
+    HANDLE reserved = CreateEventW(&inheritable, TRUE, FALSE, nullptr);
+    if (reserved == nullptr || reserved == INVALID_HANDLE_VALUE) {
+      return failJson("handle-sentinel", "CreateEventW-sentinel-reservation", GetLastError());
+    }
+    reservedParentHandles.emplace_back(reserved);
+  }
 
   ScopedHandle sentinel(CreateEventW(&inheritable, TRUE, FALSE, nullptr));
   if (!sentinel.valid()) return failJson("handle-sentinel", "CreateEventW-sentinel", GetLastError());
@@ -304,10 +337,11 @@ int runHandleSentinel() {
 
   std::printf(
       "{\"schemaVersion\":1,\"tool\":\"node-repl-win32-audit\",\"mode\":\"handle-sentinel\",\"status\":\"%s\","
-      "\"childExitCode\":%lu,\"allowedEventObserved\":%s,\"handleListCount\":1}\n",
+      "\"childExitCode\":%lu,\"allowedEventObserved\":%s,\"handleListCount\":1,\"sentinelReservationCount\":%zu}\n",
       passed ? "PASS" : "FAIL",
       static_cast<unsigned long>(childExitCode),
-      allowedWait == WAIT_OBJECT_0 ? "true" : "false");
+      allowedWait == WAIT_OBJECT_0 ? "true" : "false",
+      kSentinelReservationCount);
   return passed ? 0 : 1;
 }
 
