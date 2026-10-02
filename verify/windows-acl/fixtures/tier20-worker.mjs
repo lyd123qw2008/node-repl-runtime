@@ -34,15 +34,30 @@ function cleanup(path) {
   }
 }
 
-async function spawnSettlementProbe() {
+async function spawnSettlementProbe(stdio = 'ignore') {
   return await new Promise((resolveResult) => {
     let settled = false
-    const child = spawn(process.execPath, ['-e', 'process.stdout.write("tier20-child-settled\\n"); setTimeout(() => process.exit(0), 25)'], {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true,
-    })
+    let child
+    try {
+      child = spawn(process.execPath, ['-e', 'process.stdout.write("tier20-child-settled\\n"); setTimeout(() => process.exit(0), 25)'], {
+        cwd: process.cwd(),
+        env: process.env,
+        stdio,
+        windowsHide: true,
+      })
+    } catch (error) {
+      resolveResult({
+        started: false,
+        exitCode: null,
+        error: error?.code ?? error?.message ?? String(error),
+        win32ErrorCode: error?.win32ErrorCode ?? null,
+        syscall: error?.syscall ?? null,
+        path: error?.path ?? null,
+        stdout: '',
+        stderr: '',
+      })
+      return
+    }
     let stdout = ''
     let stderr = ''
     child.stdout?.setEncoding('utf8').on('data', (chunk) => { stdout += chunk })
@@ -52,7 +67,16 @@ async function spawnSettlementProbe() {
       settled = true
       resolveResult(result)
     }
-    child.once('error', (error) => settle({ started: false, exitCode: null, error: error?.code ?? error?.message ?? String(error), stdout, stderr }))
+    child.once('error', (error) => settle({
+      started: false,
+      exitCode: null,
+      error: error?.code ?? error?.message ?? String(error),
+      win32ErrorCode: error?.win32ErrorCode ?? null,
+      syscall: error?.syscall ?? null,
+      path: error?.path ?? null,
+      stdout,
+      stderr,
+    }))
     child.once('close', (exitCode, signal) => settle({ started: true, exitCode, signal, stdout, stderr }))
   })
 }
@@ -133,10 +157,16 @@ if (descriptorFailure.length > 0) {
   checks.ok = false
   checks.failures.push('descriptor-inheritance')
 }
-checks.childSettlement = await spawnSettlementProbe()
-if (!checks.childSettlement.started || checks.childSettlement.exitCode !== 0 || checks.childSettlement.signal !== null || checks.childSettlement.stdout !== 'tier20-child-settled\n' || checks.childSettlement.stderr !== '') {
+checks.childSettlement = await spawnSettlementProbe('ignore')
+if (!checks.childSettlement.started || checks.childSettlement.exitCode !== 0 || checks.childSettlement.signal !== null) {
   checks.ok = false
   checks.failures.push('child-settlement')
+}
+checks.pipedChildSettlement = await spawnSettlementProbe(['ignore', 'pipe', 'pipe'])
+if (!checks.pipedChildSettlement.started || checks.pipedChildSettlement.exitCode !== 0 || checks.pipedChildSettlement.signal !== null ||
+    checks.pipedChildSettlement.stdout !== 'tier20-child-settled\n' || checks.pipedChildSettlement.stderr !== '') {
+  checks.ok = false
+  checks.failures.push('child-piped-stdio')
 }
 
 function readExactly(fd, length) {
