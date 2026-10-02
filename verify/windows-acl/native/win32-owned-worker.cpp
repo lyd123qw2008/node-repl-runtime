@@ -1087,10 +1087,15 @@ int wmain(int argc, wchar_t** argv) {
     std::array<SID_AND_ATTRIBUTES, 4> restrictingAttributes{};
     restrictingAttributes[0] = SID_AND_ATTRIBUTES{logonSid.get(), 0};
     restrictingAttributes[1] = SID_AND_ATTRIBUTES{worldSid.get(), 0};
-    // Diagnostic only: hold the restriction list at the read-only baseline
-    // for one run to isolate the workspace-write 0xC0000142 loader failure.
+    // Diagnostic only: restore both workspace/temp restricting SIDs while
+    // using World for the token default DACL, isolating the 0xC0000142 cause.
     // This deliberate mismatch must not be used as a passing mode result.
     DWORD restrictingCount = 2;
+    if (options.mode == L"workspace-write") {
+      restrictingAttributes[2] = SID_AND_ATTRIBUTES{workspaceCapabilitySid.get(), 0};
+      restrictingAttributes[3] = SID_AND_ATTRIBUTES{tempCapabilitySid.get(), 0};
+      restrictingCount = 4;
+    }
     HANDLE rawRestrictedToken = nullptr;
     constexpr DWORD restrictedFlags = DISABLE_MAX_PRIVILEGE | 0x00000004 /* LUA_TOKEN */ | 0x00000008 /* WRITE_RESTRICTED */;
     BOOL created = CreateRestrictedToken(currentToken.get(), restrictedFlags, 0, nullptr, 0, nullptr, restrictingCount, restrictingAttributes.data(), &rawRestrictedToken);
