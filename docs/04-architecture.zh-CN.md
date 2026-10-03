@@ -21,7 +21,7 @@ flowchart LR
   end
 
   subgraph kernel["Persistent kernel child"]
-    qwen["@qwen-code/node-repl-mcp\nstdio MCP server"]
+    engine["@lyd123qw2008/node-repl-kernel-engine\ncompatibility stdio MCP server"]
     nrcap["nr-cap\ncap.* namespace"]
     cell["JavaScript cell\ntop-level await + persistent bindings"]
   end
@@ -37,14 +37,14 @@ flowchart LR
   face -->|"ctx.tools.register"| tools
   tools -->|"runtime.js / runtime.jsReset"| runtime
 
-  runtime -->|"starts"| qwen
+  runtime -->|"starts"| engine
   runtime -->|"creates"| bridge
   runtime -->|"connects and projects"| catalog
   catalog -->|"streamable HTTP / stdio MCP"| idea
   catalog -->|"streamable HTTP / stdio MCP"| chrome
   catalog -->|"streamable HTTP / stdio MCP"| desktop
 
-  qwen -->|"loads catalog snapshot"| nrcap
+  engine -->|"loads catalog snapshot"| nrcap
   nrcap -->|"installs"| cell
   cell -->|"cap.provider.operation"| bridge
   bridge -->|"provider.operation"| catalog
@@ -57,7 +57,7 @@ flowchart LR
 | `node-repl-runtime-bootstrap` | 读取 provider 配置，创建并提供 `nodeReplRuntime` | 不注册模型可见工具 |
 | `node-repl-runtime-face` | 注册 `js` 和 `js_reset` 两个 DSH 工具 | 不连接 MCP provider，不创建 runtime |
 | `CapabilityRuntime` | 管理 provider 连接、catalog、bridge 和 kernel 生命周期 | 不为某个 provider 编写专属分支 |
-| `@qwen-code/node-repl-mcp` | 提供常驻 JavaScript kernel 的底层 MCP 服务 | 不直接连接 IDEA、Blender 等外部 provider |
+| `@lyd123qw2008/node-repl-kernel-engine` | 本地维护的 Apache-2.0 Qwen-derived kernel 与兼容 MCP entry | 不直接连接 IDEA、Blender 等外部 provider |
 | `nr-cap` | 在 kernel 中安装 `cap.*` 命名空间和发现辅助函数 | 不自行决定 provider 权限 |
 | 外部 MCP provider | 广告工具并执行 `tools/call` | 不参与 DSH 工具注册 |
 
@@ -149,5 +149,5 @@ cell → nodeRepl.write(...) → js 工具结果
 - [DSH bootstrap：提供 `nodeReplRuntime`](../packages/dsh-bootstrap/src/index.ts)
 - [Runtime facade：创建 kernel、bridge 和 provider catalog](../packages/runtime/src/index.ts)
 - [MCP catalog：连接、发现、投影和调用 provider](../packages/runtime/src/catalog.ts)
-- [Kernel session：启动 `@qwen-code/node-repl-mcp` 并安装 `nr-cap`](../packages/runtime/src/kernel.ts)
+- [Kernel session：启动 `@lyd123qw2008/node-repl-kernel-engine` 并安装 `nr-cap`](../packages/runtime/src/kernel.ts)
 - [Provider 接入规范](./03-integration-spec.zh-CN.md)

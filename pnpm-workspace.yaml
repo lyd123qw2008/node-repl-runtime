@@ -1,4 +1,5 @@
 packages:
   - 'packages/*'
-minimumReleaseAgeExclude:
-  - '@qwen-code/node-repl-mcp@0.1.6'
+
+allowBuilds:
+  esbuild: true

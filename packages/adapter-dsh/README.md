@@ -29,7 +29,7 @@ This package only consumes the runtime — it declares `inject: ['tools', 'nodeR
 
 Which servers to attach, and which arguments are host-owned, are composition decisions and deliberately do not live in this package.
 
-The `js` description is the API documentation for the whole face — it carries discovery (`capHelp`, `cap.describe`), the output rule (`nodeRepl.write`), binding rules, and the kernel's semicolon requirement. Treat changes there as interface changes.
+The `js` description is the API documentation for the whole face — it carries discovery (`capHelp`, `cap.describe`), the output rule (`nodeRepl.write`), cross-cell binding/redeclaration rules, and ordinary JavaScript ASI behavior. Semicolons are optional where valid. Treat changes there as interface changes.
 
 ## Presentation: program-first
 

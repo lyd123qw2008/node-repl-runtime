@@ -35,7 +35,7 @@ Whether that retry happens depends on what the failure proves. A call the server
 npm install @lyd123qw2008/node-repl-runtime
 ```
 
-Node 22.19+ is required. The kernel itself is the Apache-2.0 [`@qwen-code/node-repl-mcp`](https://www.npmjs.com/package/@qwen-code/node-repl-mcp); this package drives it, projects MCP catalogs into it, and owns the provider side.
+Node 22.19+ is required. The kernel engine is maintained here as [`@lyd123qw2008/node-repl-kernel-engine`](../kernel-engine/README.md), based on Qwen's Apache-2.0 `0.1.6` source snapshot; provenance and the local patch ledger are in [`UPSTREAM.md`](../kernel-engine/UPSTREAM.md). This runtime starts its compatibility MCP entry, projects MCP catalogs into the kernel, and owns the provider side.
 
 ## API
 
@@ -61,8 +61,8 @@ When a cell does end with provider calls still in flight — out of budget, canc
 
 - **Not a sandbox.** The kernel gives lifecycle and namespace isolation; imported code and Node built-ins run with normal Node permissions.
 - **The kernel lives as long as the host process.** Nothing reclaims it on a timer, there is no heap ceiling set by this runtime, and `js_reset` is the only lever that releases bindings (measured ~115 ms — the same MCP sessions survive). Part of the growth is the reused kernel's own per-cell module machinery, which no JS-level GC can reclaim, so the honest model is the browser's: read `nodeRepl.getHeapStatus()` when it matters, drop what you no longer need (`x = null`), reset deliberately. The full decision record, including what was rejected and why, is `docs/06-kernel-boundaries.zh-CN.md`.
-- **Top-level statements need an explicit `;`.** The kernel injects snapshot code at each statement boundary, so a missing semicolon fails the whole cell with `SyntaxError: Unexpected identifier '__qwen_repl_..._snapshot'`. This is an upstream kernel behaviour, not a facade rule; see `docs/03-integration-spec.zh-CN.md` in the repository for the source-level analysis.
-- **`let`/`const` cannot be re-declared across cells** (`var` can), which is why cells that reuse a name should use `var`.
+- **Semicolons are optional wherever JavaScript/ASI permits omission.** The owned transform terminates source statements before inserting checkpoint snapshots; it does not change the user's parsed statement boundaries.
+- **Top-level bindings can be redeclared across cells.** Earlier closures observe the newest binding. Assigning to a current `const` remains an error, and duplicate lexical declarations in one cell remain syntax errors.
 - **Provider results are relayed, never rewritten.** If a server answers in content blocks, the cell sees content blocks.
 
 MIT licensed.

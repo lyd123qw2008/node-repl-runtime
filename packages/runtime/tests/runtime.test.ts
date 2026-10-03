@@ -140,19 +140,19 @@ describe('capability runtime (hermetic)', () => {
     expect(second.output).not.toContain('set total')
   })
 
-  it('re-declares `var` but rejects a second `let` — the documented deviation', async () => {
-    await runtime.js('var again = 1;')
-    const redeclared = await runtime.js('var again = 2; nodeRepl.write("again=" + again);')
+  it('supports cross-cell declaration replacement and semicolon-free statements', async () => {
+    await runtime.js('const once = 1; const readOnce = () => once;')
+    const redeclared = await runtime.js(
+      'let once = 2\nnodeRepl.write(`${once}|${readOnce()}`)',
+    )
     expect(redeclared.status).toBe('ok')
-    expect(redeclared.output).toContain('again=2')
+    expect(redeclared.output).toContain('2|2')
 
-    await runtime.js('let once = 1;')
-    const rejected = await runtime.js('let once = 2;')
-    // This is why the tool description tells the model to prefer `var` for names it
-    // may redefine. If the reused kernel ever accepts this, the test should change
-    // and the description should be simplified.
-    expect(rejected.status).toBe('error')
-    expect(rejected.error?.message ?? '').toContain('already been declared')
+    const redeclaredAgain = await runtime.js('const once = 3')
+    expect(redeclaredAgain.status).toBe('ok')
+    const latest = await runtime.js('nodeRepl.write(`${once}|${readOnce()}`)')
+    expect(latest.status).toBe('ok')
+    expect(latest.output).toContain('3|3')
   })
 
   it('exposes the capability catalog inside the kernel', async () => {
