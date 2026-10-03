@@ -11,8 +11,8 @@ export * from './types.js';
 export { applyInjection, catalogEntries, classifySessionLoss, connectMcpProvider, describeProviderError, isSessionLoss, projectOperation, providerHealth, selectTools, unattachedHealth, } from './catalog.js';
 export { abandonedCallsNotice, catalogRecoveryNotice } from './kernel.js';
 export { collectProviderImages, mergeProviderImages, PROVIDER_IMAGE_MAX_BYTES, PROVIDER_IMAGE_TOTAL_MAX_BYTES, type ProviderImage, type ProviderImages, } from './catalog.js';
-/** The reused kernel server. Its package entry point *is* the MCP server. */
-export declare const KERNEL_PACKAGE = "@qwen-code/node-repl-mcp";
+/** Our maintained Qwen-derived kernel package (MCP entry kept as a compatibility boundary). */
+export declare const KERNEL_PACKAGE = "@lyd123qw2008/node-repl-kernel-engine";
 export interface CapabilityRuntime {
     /** Run one JavaScript cell in the persistent kernel. */
     js(code: string, options?: JsOptions): Promise<JsCellResult>;

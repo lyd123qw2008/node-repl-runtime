@@ -134,8 +134,8 @@ Currently open projects: {"projects":[{"path":"D:/..."}]}
 
 ## 已知边界
 
-- **顶层语句必须显式写 `;`**。内核在每条语句的边界注入快照代码、且**没有前导分隔符**，缺分号时那个标识符就粘在上一条语句后面，整个 cell 报 `SyntaxError: Unexpected identifier '__qwen_repl_..._snapshot'`。因为绑定会跨 cell 继承，**除第一个 cell 外几乎总会踩到**。已在 GH 源码核对（`QwenLM/qwen-code` `packages/node-repl`，`main` 即 `0.1.6`，`src/runtime/*.mjs` 与 dist 字节级一致），上游尚未修、也未发现已有 issue；一个字符就能修（`snapshotAssignments()` 前加 `;`）。我们不打补丁，`js` 的描述里已写明规则并给出这个错误签名。
-- **`let`/`const` 不能跨 cell 重声明**（`var` 可以）。`js` 的描述里已写明引导模型用 `var`。
+- **分号可按普通 JavaScript/ASI 省略**。自维护 kernel 在插入快照前终止解析得到的 source item，并以真实 kernel 测试覆盖 ASI 换行、注释、tagged template 和无尾分号 cell。
+- **顶层 binding 可跨 cell 重声明**，包括 `var` / `let` / `const` / function / class；旧 closure 观察最新 binding。当前 `const` 的直接赋值仍报错，同一 cell 的重复 lexical 声明仍是语法错误。Qwen 基线与本地 patch ledger 见 [`packages/kernel-engine/UPSTREAM.md`](../../packages/kernel-engine/UPSTREAM.md)。
 - **`wait` / `cancel` 未暴露**：长 cell 只能等超时（默认 30s，可用 `timeoutMs` 调）。超时只停当前 cell，内核与已有绑定保留。
 - **不是安全沙箱**：内核子进程与 MCP 会话有普通 Node 权限。这是可信环境下的运行时。
 - **每次 profile 加载都会连一次 MCP**（`tools/list` 元数据），不做任何工具调用。
