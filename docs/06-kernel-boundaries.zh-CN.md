@@ -1,6 +1,6 @@
 # 内核边界与已知限制
 
-> 这是一份**决定记录**，不是待办清单。内核（`@qwen-code/node-repl-mcp`）是常驻进程、绑定跨 cell 存活，
+> 这是一份**决定记录**，不是待办清单。当前内核由 `@lyd123qw2008/node-repl-kernel-engine` 维护，基于 Qwen `0.1.6` Apache-2.0 源码；它是常驻进程、绑定跨 cell 存活，
 > 于是"内存会累积、cell 能起进程、内核死了谁善后"这些问题落在我们这一层。本文记录：实测到的事实、
 > 两个对照实现（Qwen 同族内核、Codex code-mode）的取舍、我们**刻意不做**的部分及理由，
 > 以及**什么情况下应该回头做**。
@@ -39,7 +39,7 @@
 
 ## 2. 两个对照实现
 
-### Qwen `@qwen-code/node-repl-mcp`（我们用的内核）
+### Qwen 上游 `@qwen-code/node-repl-mcp` 0.1.6（当前本地维护包的来源基线）
 
 - **常驻**内核，per-MCP 连接一个；`generation` 单调递增，旧世代的结果一律判 `crashed` + "bindings were lost"。
 - 受管终止时杀**进程树**：POSIX 进程组 `kill(-pid)`、Windows `taskkill /T`；`CANCEL_GRACE 5s` → SIGKILL。

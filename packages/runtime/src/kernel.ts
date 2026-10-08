@@ -1,21 +1,22 @@
 /**
  * Own the reused node_repl kernel.
  *
- * The kernel itself is `@qwen-code/node-repl-mcp` (Apache-2.0), which already
- * implements the parts that are expensive to get right: a child-process Node kernel
- * with top-level await, bindings that persist and survive a throwing cell, module
- * roots, cancellation, reset, and the cell transform that makes re-declaration
- * semantics work. This package does not reimplement any of it — it starts that
- * kernel, hands it a capability catalog, and runs cells.
+ * The kernel engine is maintained in `@lyd123qw2008/node-repl-kernel-engine`,
+ * derived from Qwen's Apache-2.0 `0.1.6` source snapshot. It supplies a child-process
+ * Node kernel with top-level await, persistent bindings, module roots, cancellation,
+ * reset, and the cell transform. This runtime starts its compatibility MCP entry,
+ * hands it a capability catalog, and runs cells; custom cell semantics are maintained
+ * in the owned kernel package.
  *
  * What we add on top is exactly one thing: a scratch kernel root containing the
  * `nr-cap` bridge module, plus a config snapshot, so a cell can `await
  * import('nr-cap')` and reach the host's MCP catalog.
  *
- * Measured deviation worth knowing (see `docs/02-reuse-spike-results.zh-CN.md`):
- * this kernel rejects a second `let`/`const` for the same name with a SyntaxError,
- * while `var` may be re-declared. That is why the tool description tells the model
- * to prefer `var` for names it may redefine.
+ * The owned cell transform permits cross-cell top-level redeclaration while
+ * keeping references and earlier closures on the same live binding. Duplicate
+ * lexical declarations in one cell remain JavaScript syntax errors; assigning to
+ * a current `const` still throws. Cancellation restores the binding reference
+ * state captured at cell entry.
  */
 
 import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'

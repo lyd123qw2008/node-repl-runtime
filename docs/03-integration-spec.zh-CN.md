@@ -154,23 +154,11 @@ js_reset   清空内核绑定（目录会立刻重新装好）
 
 ## 9. 当前边界（诚实声明）
 
-- **内核是依赖来的**：`@qwen-code/node-repl-mcp`（Apache-2.0，0.1.x）。5 个工具里我们用到 `node_repl` / `node_repl_wait` / `node_repl_cancel` / `node_repl_reset`；`add_node_module_dir` 未暴露（长操作靠预算兜底）。模型面上仍然只有两个工具——wait/cancel 由运行时自己调用，不是模型的选择。
+- **内核由仓库内维护**：`@lyd123qw2008/node-repl-kernel-engine`，来源为 Qwen `@qwen-code/node-repl-mcp@0.1.6` Apache-2.0 源码快照；来源 revision、本地补丁和同步流程见 [`packages/kernel-engine/UPSTREAM.md`](../packages/kernel-engine/UPSTREAM.md)。runtime 继续使用其兼容 MCP entry 的 `node_repl` / `node_repl_wait` / `node_repl_cancel` / `node_repl_reset` 工具；`add_node_module_dir` 未暴露。模型面上仍只有两个工具——wait/cancel 由运行时自己调用，不是模型的选择。
 - **内核不发 `structuredContent`**：它把 5 态状态编码进 `isError` + **文本前缀** `[node_repl <status>] …`（其 `output-adapter.js` 原话："Preserve the 5-way status that MCP's boolean isError would otherwise lose"）。运行时**必须解析这个前缀**：只看 `isError` 会把内核超时报成普通 `error`，而且下面那条"放弃即取消"的规则会因此**不触发**（实测踩过一次）。相关：`node_repl` 默认 `yield_time_ms=10000`，超时先交还控制权（纯文本 + cell id），要用 `node_repl_wait` 收尾；`node_repl_reset` 在 cell 活跃时**直接拒绝**，必须先 `node_repl_cancel`。
 - **cell 被放弃（timeout / cancelled / crashed / running）时必须取消在途的 provider 调用**。只停止等待不够：请求留在飞行中，对**按会话串行**的 provider（浏览器 bridge 就是）会把该会话后续所有调用堵在它后面 —— 实测一个滞留请求把整个会话的页面读取锁死，只能靠回收会话恢复。实现：`bridge.abandonInFlight()` 中止对应请求（经 SDK 发出 MCP cancellation 通知，支持取消的 provider 会真正停下），每个请求同时绑定到发起它的 socket，内核进程消失时一并中止；因此 `ProviderConnection.call` 带一个可选 `AbortSignal`。`ok`/`error` 结束的 cell **不**触发放弃 —— 它们可能故意发了不等结果的调用。
-- **这个内核要求顶层语句显式写 `;`（注入的快照代码没有前导分隔符）**。已在 GH 源码层面核对（`QwenLM/qwen-code` `packages/node-repl`，`main` 的版本号就是 `0.1.6`，且 `src/runtime/*.mjs` 与安装的 dist **字节级一致**）。两处独立的成因：
-
-  1. **语句边界注入没有前导分隔符（最常见的触发）**：`snapshotAssignments()`（`cell-transform.ts` L338-360）生成的是 `X_snapshot["name"] = {...};`，被插到每条语句的 `endIndex`。只要 `activeBindings` 非空它就非空——而**上一个 cell 的绑定会被继承**，所以除第一个 cell 外几乎总是如此。前一条语句若没有 `;`，快照标识符就直接粘在它后面：`nodeRepl.write('hi')__qwen_repl_1_0__snapshot["installed"] = {...};` → `SyntaxError`。
-  2. **同一偏移的两段注入粘连**：顶层 `var`/`let`/`const` 声明末尾无 `;` 时，声明级标记（`snapshotDeclarator()` L362-380，以 `, ` 开头）与语句级 commit 落在**同一 `endIndex`**，稳定排序把前者放前，于是 `...(undefined)__qwen_repl_..._snapshot[...]`。这一条在**空内核**里也会触发。
-
-  复现（`node --experimental-vm-modules`，直接喂 `prepareNodeReplCell()` 的输出给 `vm.SourceTextModule`）：
-
-  | cell | 空内核 | 有继承绑定 |
-  | --- | --- | --- |
-  | 无声明 + 缺 `;` | ✅ 接受 | ❌ 拒绝 |
-  | 顶层声明 + 缺 `;` | ❌ 拒绝 | ❌ 拒绝 |
-  | 任意 + 有 `;` | ✅ | ✅ |
-
-  上游修复只需一个字符：让 `snapshotAssignments()` 返回 `';' + assignments.join('')`（语句边界上的多余 `;` 无害，且两种情况会同时被修好）。**我们没有 patch 上游**：处理是描述里如实告知，而不是在 facade 里改写用户代码或给依赖打补丁。`js` 的描述写明规则并把 `__qwen_repl_..._snapshot` 这个错误签名一起给出，便于模型自我纠正。
+- **statement snapshot 与分号（已修复）**：旧版 Qwen transform 会把快照代码直接接在 source item 尾部，省略分号时可能令生成代码语法错误。当前自有 transform 在插入 checkpoint assignment 前显式终止已解析的 source item；真实 kernel 测试覆盖 ASI 换行、line/block comment、tagged template 和无尾分号的后续 cell。描述不再要求显式分号。
+- **跨 cell 重声明（已扩展）**：顶层 `var` / `let` / `const` / function / class 可在后续 cell 重定义；旧 closure 经共享引用看到最新 binding。对当前 `const` 直接赋值、同 cell 内重复 lexical 声明仍按错误处理；发生 error 时保留完成 statement/declarator checkpoint，cancel/timeout 恢复 cell-entry binding 状态。实现、限制与 provenance 见 [`packages/kernel-engine/UPSTREAM.md`](../packages/kernel-engine/UPSTREAM.md)。
 - **不是安全沙箱**：`vm`/isolate 提供的是生命周期与命名空间隔离。被导入的包与 Node 内建拥有普通 Node 权限。授予谁使用要按这个前提判断。
 - **`include` 是收窄而非审查**：它只按名字过滤，没有"批准"语义。
 - **cell 里只有 Node 内建，没有 npm 包**（实测）：

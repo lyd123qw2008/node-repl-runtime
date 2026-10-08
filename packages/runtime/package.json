@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/client": "2.0.0",
-    "@qwen-code/node-repl-mcp": "0.1.6"
+    "@lyd123qw2008/node-repl-kernel-engine": "workspace:*"
   },
   "devDependencies": {
     "@modelcontextprotocol/server": "2.0.0",

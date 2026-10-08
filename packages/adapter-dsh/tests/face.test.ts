@@ -126,15 +126,16 @@ describe('two-tool face', () => {
     // Each of these was a real failure mode during development.
     expect(description).toContain('nodeRepl.write')
     expect(description).toContain('capHelp')
+    expect(description).toContain('redeclare')
     expect(description).toContain('var')
     expect(description).toContain('host-owned')
     expect(description).toContain('await import')
-    // The kernel injects snapshot code at every statement boundary without a
-    // leading separator, so a top-level statement missing its `;` fails the cell
-    // with an internal `__qwen_repl_..._snapshot` SyntaxError. Confirmed against
-    // @qwen-code/node-repl-mcp 0.1.6 (npm `latest`, and `main` on GitHub).
-    expect(description).toContain('statement boundary')
-    expect(description).toContain("__qwen_repl_")
+    expect(description).toContain('closures observe the latest binding')
+    expect(description).toContain('same cell')
+    expect(description).toContain('semicolon is optional')
+    expect(description).toContain('statement boundaries')
+    expect(description).not.toContain('prefer `var`')
+    expect(description).not.toContain('must end every top-level statement')
     // An affordance the model cannot discover is not an affordance: `_images` and
     // `emitImage` must be named, or a screenshot provider is unusable from a cell.
     expect(description).toContain('_images')

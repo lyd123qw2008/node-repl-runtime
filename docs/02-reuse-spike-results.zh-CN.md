@@ -1,6 +1,6 @@
 # 复用内核的 spike 结果（路径 A 已验证）
 
-> 状态：**实测完成，路径 A 可行。** 原始日志：`docs/evidence/reuse-spike.log`、`reuse-spike-first-run.log`。
+> 状态：**初始 spike 实测完成，证明 MCP kernel + capability bridge 的接入路径可行。** 随后已完成内核源码 ownership 与两项语义修复；当前状态以 [`docs/10-qwen-kernel-ownership-and-redeclaration-plan.zh-CN.md`](10-qwen-kernel-ownership-and-redeclaration-plan.zh-CN.md) 为准。原始日志：`docs/evidence/reuse-spike.log`、`reuse-spike-first-run.log`。
 > 代码：`spike/host.mjs`（宿主侧）、`spike/kernelroot/node_modules/nr-cap/index.mjs`（内核侧桥）。
 
 ## 0. 结论
@@ -62,7 +62,7 @@
 | `let L = 1` → `var L = 2` | ❌ `SyntaxError`（`var` 不能遮蔽已有 `let`） |
 | `undeclared = 7`（隐式全局） | ❌ 抛错（不产生隐式全局） |
 
-### 唯一的偏差：`let`/`const` 不能跨 cell 重声明
+### 初始 baseline 的重声明偏差（后续已修复）
 
 node_repl/Codex 的文档明确宣传 "Top-level bindings persist until `js_reset` and **can be redeclared**"。**复用的这个内核不满足这一条**——`var` 可以，`let`/`const` 不行。
 
@@ -78,17 +78,16 @@ node_repl/Codex 的文档明确宣传 "Top-level bindings persist until `js_rese
 
 > 最初为 (b) 写过一个 transform（原 `packages/kernel/src/transform.ts`）。选定 (a) 之后它没有任何触发场景，属死代码，**已删除**——留着一个用不上的机制正是本项目反目标清单里禁止的事。
 
-## 3. 这对计划的影响
+## 3. 这对最初实现计划的影响
 
-- **路径 A 已验证，不需要 fork** → `packages/kernel/src/transform.ts` 继续只当 (b) 的备用件。
-- **能复用的比预想更多**：内核的 5 个工具面可以直接就是我们工具面的一部分（`js` 系列），我们只需再加目录相关的 1–2 个。
+- **接入路径 A 已验证**：初始 spike 证明可用 MCP kernel + capability bridge。后续为了 kernel patch ownership，已经 vendor 为 `@lyd123qw2008/node-repl-kernel-engine`；不再代表当前采用外部 npm dependency。
+- **能复用的比预想更多**：kernel 的 5 个工具可以作为 runtime 内部接口，模型面仍只暴露 `js` / `js_reset`。
 - **`inject` 验证有效**：`projectPath` 从模型可见 schema 里消失、由宿主注入、模型提供即拒绝 —— 这条通用机制成立。
 - **"零代码接入 MCP" 在 spike 里就是 6 行配置**（`PROVIDER_CONFIG` 里那一个对象）。
 
-## 4. 尚未做的
+## 4. 后续状态
 
-1. 把 spike 产品化：`packages/runtime`（bridge server + MCP catalog + inject + kernel 管理）、`packages/adapter-dsh`（工具面）。
-2. hermetic 测试（假 provider，不依赖 IDE）。
-3. `integration:demo` CLI 与接入规范文档。
-4. 决定 (a) 还是 (a)+(b) 处理重声明偏差。
-5. 决定依赖 `@qwen-code/node-repl-mcp`（0.1.6）还是 vendor 其内核模块。
+1. spike 已产品化为 `packages/runtime`（bridge + MCP catalog + inject + kernel 管理）与 `packages/adapter-dsh`（两工具面）；hermetic 测试已通过。
+2. `integration:demo` CLI 与接入规范文档已建立。
+3. 重声明采用共享 live binding 合同；跨 cell 顶层声明可替换，旧 closures 读取新 binding。
+4. kernel 已 vendor 为本地 package，semicolons/snapshot 与 redeclaration patches 已完成。来源及完整 patch ledger 见 [`packages/kernel-engine/UPSTREAM.md`](../packages/kernel-engine/UPSTREAM.md)。
