@@ -29,6 +29,8 @@ A provider whose server restarted is reconnected and retried **once, transparent
 
 Whether that retry happens depends on what the failure proves. A call the server rejected (a session it no longer knows) or one whose transport was already gone never reached the tool, so it is re-sent — that includes a dead stdio child, whose next request the SDK reports as a plain `Error("Not connected")`. A connection that failed with the request *in flight* proves nothing about whether the tool started, so those are retried only when the operation declares `readOnlyHint`; a mutating operation gets an error saying the call may already have run, because a blind retry of a deploy is how one effect becomes two.
 
+Pass `signal` in `JsOptions` — and a host adapter should pass its tool call's own signal — to stop a running cell. The cell is cancelled *through the kernel* rather than abandoned, so the browser or IDE it was driving stops: the kernel keeps the bindings that existed before the cell and rolls back what the cell itself assigned, the result is the ending the cell actually reached (including what it printed), and any provider call still in flight is cancelled and named in the notice. Cancelling also waits for the kernel to free its single active-cell slot, because leaving it occupied would make the next cell fail with "already has active cell".
+
 ## Install
 
 ```bash

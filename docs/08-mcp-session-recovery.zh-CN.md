@@ -181,9 +181,57 @@ call(op, args)
   之前就可用，所以早期输出不会漏），**同时仍然把这些字节照写宿主 stderr**——捕获不能让运行中的
   服务端日志从日志里消失，只是让最后几句话能出现在 `failures`/`capHelp()` 里。
 
+### 3.6 宿主取消：停下 cell，而不是丢下它
+
+`js` 是一段**程序**，不是一次请求：它可以连续驱动浏览器和 IDE 好几分钟。DSH 的停止/暂停把
+`ToolRunContext.signal` 交给工具，而**我们过去没有把它传下去**——`js` 的 `execute` 拿到了 `exec` 却只转发
+`timeoutMs`/`title`，`KernelSession.run` 也没有 signal 参数，于是"暂停"只关掉了宿主那一侧的等待，
+**cell 继续在核心里跑**（实测：一句轮询 Jenkins 的 cell 在点了暂停之后继续 navigate 到构建结束）。
+另一层原因是延迟：内核一次 `node_repl_wait` 最长可阻塞 `MAX_YIELD_MS = 60 s`，不主动监听就最多 60 s 才可能察觉。
+
+现在这条链是通的（`packages/adapter-dsh` 把 `exec.signal` 传进 `runtime.js`）：
+
+```text
+宿主 abort
+  ├─ 每次内核调用都与 abort 竞争（raceAbort）→ 最长 ~2 s 内察觉
+  ├─ 取消走内核 node_repl_cancel（不是丢下不管）
+  │    ├─ 先快照在飞 provider 调用（取消会把它们清空，之后再取就没了）
+  │    ├─ 等内核真正**释放** active-cell 槽（否则下一格被拒：
+  │    │    "node_repl already has active cell …" —— 这曾是本改动的第一个 bug）
+  │    └─ 用内核返回的终局结果（含被取消 cell 已经打印的输出）作为结果
+  └─ 追加一行提示：谁停的、状态如何处理、哪些调用被切断
+```
+
+首调用还加了 `CANCELLABLE_FIRST_YIELD_MS = 2 s` 的上限：内核只在调用返回时才给出 cell id，
+在此之前取消无处可指（这曾是第二个 bug：abort 落在首调用返回前，取消分支拿不到 id 而被跳过）；
+不设上限这段"盲窗"就是最长 60 s，代价是超时的那一格多一次本地往返。
+
+两条内核语义值得写下来（读自 `dist/runtime/kernel.mjs`，不是推测）：
+
+- **被取消 cell 自己的赋值会回滚**：`restoreBindings(entryBindings)` 把绑定恢复到 cell 入口状态，
+  所以"更早的绑定保留原值、本 cell 的赋值消失"。提示里明说了这点，否则模型会把随后的 `undefined` 当 bug；
+- `clearTimersForExec()` 会清掉该 cell 的 timer，`exec.cancellationBarriers` 保证已派发的 native 工作
+  到达终态后才报终局——所以取消报告的是**真实终局**，不是乐观假设。
+
+### 3.7 其余生命周期面（审计结果）
+
+把"宿主/内核/provider 的生命周期事件"逐个对照过一遍：**除取消这一处，其余都已处理，或是有意为之**。
+
+| 生命周期事件 | 现状 | 依据 |
+| --- | --- | --- |
+| 插件/宿主卸载 | ✅ `ctx.effect` → `runtime.dispose()`：关内核、bridge、全部 provider | `packages/dsh-bootstrap/src/index.ts` |
+| 内核侧 socket 断开 | ✅ bridge 中止所有在飞调用 | `bridge.ts` `socketCalls` |
+| cell 预算耗尽 | ✅ 取消 + 预算提示（点名在飞调用） | §3.2 / `abandonedCallsNotice` |
+| 内核 **worker** 崩溃 | ✅ `crashed` → 重装 catalog（有测试） | `runtime.test.ts` "kernel replacement" |
+| provider 会话失效 / 子进程死亡 | ✅ 重连与重试 | §3.1 / §3.2 |
+| **宿主取消 cell** | ✅ 本次修复 | `kernel-cancel.test.ts` |
+| **内核 MCP server 进程本身死亡** | ❌ 未处理：下一次调用以 `Error("Not connected")` 失败，**不会**重建会话（只有 worker 死亡才走 `crashed`）。修法是一次单独改动：重建 `KernelSession` + 重装 catalog（绑定按定义丢失，必须如实说） | §5 边界 |
+| **`js_reset` 不接宿主信号** | ⚠️ 同类遗漏的残余：reset 期间宿主 abort 不会中断（它本身很短：cancel + reset + install） | `adapter-dsh/src/index.ts` |
+| cell 正常结束但仍有 fire-and-forget provider 调用 | ⚠️ **有意保留**（可能是刻意不 await 的调用）；与 Pi 相反——Pi 在脚本返回时中止并报告 cancelled | §5 边界 |
+
 ## 4. 验证
 
-全部 hermetic（无网络、无 IDE），三个 provider 行为文件共 21 个用例（7 + 6 + 8）：
+全部 hermetic（无网络、无 IDE）。四个文件：三个 provider 行为文件 21 个用例（7 + 6 + 8），加上取消 3 个：
 
 `packages/runtime/tests/session-recovery.test.ts`（7 个）：
 
@@ -214,6 +262,13 @@ call(op, args)
 （stdio 那条直接报 `Not connected`，mutate 那条**重试后成功**——正是要避免的双重副作用）；
 把 `stderr` 换回 `'inherit'`、去掉错误文本上限各让对应用例变红。
 
+`packages/runtime/tests/kernel-cancel.test.ts`（3 个，2026-09-30 补）：
+
+| 用例 | 断言 |
+| --- | --- |
+| 宿主取消一个在睡的 cell | 立刻（``< 15 s`` 而不是 30 s 睡眠或 60 s 预算）返回 `cancelled`，输出含"宿主取消了这一格"；随后**内核仍可用**：更早的 `var kept = 41` 仍在、被取消 cell 里的 `var inside = 1` 已回滚成 `undefined`、`cap` 仍在 |
+| 取消切断的 provider 调用 | 在飞调用被点名（`idea.slow (… s)` + `has been cancelled`），且不出现 cell 自己写的 finished |
+| 提示文案（纯函数） | 含"谁停的"与"本 cell 赋值已回滚"，并列出被切断的调用 |
 `packages/runtime/tests/provider-attach.test.ts`（6 个，含并发连接）：
 
 | 用例 | 断言 |
@@ -224,7 +279,7 @@ call(op, args)
 | `disabled` / 未知 id | 分别以"configured with disabled: true"和"unknown provider"拒绝 |
 | 内核被替换后 | 运行期接入的 provider 与 `capHelp()` 都不会倒退到启动快照（覆盖 §3.3 第 4 点） |
 
-回归：`packages/runtime` **57 个**、`adapter-dsh` 15 个、`dsh-bootstrap` 7 个测试全绿（`pnpm run verify`，共 79 个），
+回归：`packages/runtime` **62 个**、`adapter-dsh` 15 个、`dsh-bootstrap` 9 个测试全绿（`pnpm run verify`，共 86 个），
 stdio provider 与内核路径行为未变。修复实测前后的对比是同一份复现用例：
 修复前 cell 报 `MCP_CALL_FAILED: Error POSTing to endpoint: Streamable HTTP session not found`
 （与生产现场逐字一致），修复后返回结果。
@@ -235,7 +290,7 @@ stdio provider 与内核路径行为未变。修复实测前后的对比是同�
   内核子进程被杀时 runtime 走既有语义（`crashed` → 重装 catalog，见
   [`docs/04-architecture.zh-CN.md`](04-architecture.zh-CN.md)）；内核**空闲时**死掉的盲区同样还在。
   两处的差别是：内核会话没有 session id 可失效，它的失效信号是"子进程没了"，
-  重开意味着重建整个 `KernelSession`（含 install cell），值得单独一次改动。
+  重开意味着重建整个 `KernelSession`（含 install cell），值得单独一次改动；**worker 死（已处理）与 server 进程本身死（未处理）的区分见 §3.7**。
   这次做掉的是它的**可见性**：重装失败不再被吞掉，cell 会看到
   `[node_repl kernel was replaced and the capability catalog could not be reinstalled: <原因>]`，
   而不是一个没有解释的 `cap is not defined`；
