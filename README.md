@@ -35,7 +35,7 @@ CapabilityRuntime                     ← catalog + host bridge
 | 本地发现（`capHelp()` / `cap.describe()`） | 6 ms，不过桥 |
 | 会话失效恢复（服务端重启后忘记 session id） | 透明重连 + 重试一次；并发 10 个调用只重连 **1** 次 |
 | 启动时不可达的 provider | spec 保留，`cap.reconnect(id)` 运行期接入（恰好 1 个新会话），不必重启宿主 |
-| 测试 | **79 个** hermetic（57 runtime + 15 adapter + 7 bootstrap），无网络无 IDE |
+| 测试 | **86 个** hermetic（62 runtime + 15 adapter + 9 bootstrap），无网络无 IDE |
 
 复用内核的语义：持久 ✅、改值 ✅、函数持久 ✅、抛错检查点 ✅；**`let`/`const` 不能跨 cell 重声明（`var` 可以）**——这是对标 node_repl 时唯一的偏差，已写进 `js` 的描述引导模型。
 

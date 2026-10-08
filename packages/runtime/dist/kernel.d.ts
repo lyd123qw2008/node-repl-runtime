@@ -40,6 +40,18 @@ export declare function catalogRecoveryNotice(failure: string | undefined): stri
  */
 export declare function abandonedCallsNotice(calls: readonly InFlightCall[], status: JsCellResult['status'], budgetMs: number): string | undefined;
 /**
+ * What a host cancellation says in the result.
+ *
+ * Not the same message as a spent budget: there is nothing to retry differently and no larger
+ * `timeoutMs` to suggest, because the person asked for the cell to stop. What a reader needs is
+ * who stopped it, what happened to the state, and which provider calls were cut off.
+ *
+ * The rollback is the kernel's own behaviour and worth naming: `kernel.mjs` restores the bindings
+ * captured at cell entry, so everything the cancelled cell assigned is gone while earlier bindings
+ * keep their values. A model that does not know this will read a later `undefined` as a bug.
+ */
+export declare function hostCancelledNotice(calls: readonly InFlightCall[]): string;
+/**
  * Where the kernel child lives. Kept scratch: it holds a generated config, not user data.
  *
  * The name is a UUID rather than a timestamp: two runtimes created in the same

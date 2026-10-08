@@ -34,7 +34,7 @@ export {
   selectTools,
   unattachedHealth,
 } from './catalog.js'
-export { abandonedCallsNotice, catalogRecoveryNotice } from './kernel.js'
+export { abandonedCallsNotice, catalogRecoveryNotice, hostCancelledNotice } from './kernel.js'
 // Pure functions of one provider reply, so they are asserted directly instead of through a
 // CONNECTED server — the same reason `projectOperation` and `selectTools` are exported.
 export {
