@@ -323,6 +323,10 @@ export function createNodeReplTools(host: NodeReplToolHost) {
       const result = await host.runtime.js(args.code, {
         ...args.timeoutMs === undefined ? {} : { timeoutMs: args.timeoutMs },
         ...args.title === undefined ? {} : { title: args.title },
+        // The host's stop button, carried all the way to the kernel: without it a cell keeps
+        // driving browsers and IDEs after the person asked it to stop, and the only thing that
+        // ever ended it was its own budget.
+        ...exec.signal === undefined ? {} : { signal: exec.signal },
       })
       const images = result.blocks.filter((block): block is CellImageBlock => block.kind === 'image')
       const { refs, refusal } = await commitImages(host, images, exec)

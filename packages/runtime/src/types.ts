@@ -258,6 +258,15 @@ export interface JsOptions {
   readonly timeoutMs?: number
   /** Short display-only description of what the cell does. */
   readonly title?: string
+  /**
+   * The host's own cancellation, aborted when the person stops the turn.
+   *
+   * Distinct from {@link JsOptions.timeoutMs}: a spent budget says "give me more time", while this
+   * says "stop now". It cannot wait for the kernel's yield window to notice — the cell is driving
+   * browsers and IDEs in the meantime — so the runtime races it, stops the cell through the kernel,
+   * and reports that the cell was cancelled.
+   */
+  readonly signal?: AbortSignal
 }
 
 /** Test seam: swap the MCP connection out for a hermetic fake. */
