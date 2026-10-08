@@ -35,7 +35,7 @@ CapabilityRuntime                     ← catalog + host bridge
 | 本地发现（`capHelp()` / `cap.describe()`） | 6 ms，不过桥 |
 | 会话失效恢复（服务端重启后忘记 session id） | 透明重连 + 重试一次；并发 10 个调用只重连 **1** 次 |
 | 启动时不可达的 provider | spec 保留，`cap.reconnect(id)` 运行期接入（恰好 1 个新会话），不必重启宿主 |
-| 测试 | **255 passed / 6 skipped**（kernel 172 + runtime 59 + adapter 15 + bootstrap 9）；含 1 个因当前 Windows runner 无 symlink privilege 而显式 skip 的 fixture，无 IDE/外部服务依赖 |
+| 测试 | **259 passed / 5 skipped**（kernel-engine 173 + runtime 62 + adapter 15 + bootstrap 9）；5 个是当前 Windows runner 无 symlink privilege 的 N-API fixture；无 IDE/外部服务依赖 |
 
 内核源码已在 `packages/kernel-engine/` 接管并维护（Apache-2.0，Qwen `0.1.6` 基线）：支持普通 ASI/省略分号、跨 cell 重复声明顶层 `var`/`let`/`const`/function/class，并让旧 closure 观察最新 binding；同 cell lexical 重复声明与对当前 `const` 赋值仍遵守错误语义。
 

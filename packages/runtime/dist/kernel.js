@@ -90,6 +90,26 @@ export function abandonedCallsNotice(calls, status, budgetMs) {
         : `[cell ended as ${status} with ${list} still in flight — the call was cancelled and nothing can read its answer]`;
 }
 /**
+ * What a host cancellation says in the result.
+ *
+ * Not the same message as a spent budget: there is nothing to retry differently and no larger
+ * `timeoutMs` to suggest, because the person asked for the cell to stop. What a reader needs is
+ * who stopped it, what happened to the state, and which provider calls were cut off.
+ *
+ * The rollback is the kernel's own behaviour and worth naming: `kernel.mjs` restores the bindings
+ * captured at cell entry, so everything the cancelled cell assigned is gone while earlier bindings
+ * keep their values. A model that does not know this will read a later `undefined` as a bug.
+ */
+export function hostCancelledNotice(calls) {
+    const list = calls
+        .map(call => `${call.name} (${(call.elapsedMs / 1000).toFixed(1)} s)`)
+        .join(', ');
+    const state = 'the kernel stopped it and rolled its own assignments back; every earlier binding kept its value';
+    return list === ''
+        ? `[the host cancelled this cell: ${state}]`
+        : `[the host cancelled this cell: ${state}; ${list} was still in flight and has been cancelled]`;
+}
+/**
  * The MCP stdio client deliberately starts children with a small safe environment.
  * A persistent node_repl kernel nevertheless needs the host's explicit outbound
  * routing policy: otherwise a DSH process launched from a stale Windows Explorer
@@ -221,6 +241,28 @@ export async function startKernel(options) {
     const MAX_YIELD_MS = 60_000;
     /** Slack for collecting the terminal result after the caller's budget is spent. */
     const DRAIN_GRACE_MS = 5_000;
+    /** How long the kernel may take to stop a cancelled cell before it gives up and discards it. */
+    const CANCEL_GRACE_MS = 5_000;
+    /** One short wait to collect a cancelled cell's terminal result — what it printed before stopping. */
+    const CANCEL_HANDOFF_MS = 2_000;
+    /**
+     * Cap on the *first* kernel call when the host can cancel.
+     *
+     * The kernel hands back a cell id only when a call returns, so until then a cancellation has
+     * nothing to aim at: without this cap that blind window would be the kernel's full yield (up to
+     * {@link MAX_YIELD_MS}) while the cell keeps driving a browser or an IDE. The cost is one extra
+     * local round trip for a cell that outlives the cap.
+     */
+    const CANCELLABLE_FIRST_YIELD_MS = 2_000;
+    /**
+     * How long to keep waiting for a cancelled cell to become terminal.
+     *
+     * The kernel stops the cell's JavaScript immediately but only frees its active-cell slot when the
+     * terminal result exists, so this is what keeps "the next cell is refused" from being the visible
+     * outcome of pressing stop. The kernel's own cancel grace is 5 s, after which it terminates the
+     * kernel and discards bindings, so this bound covers that plus slack.
+     */
+    const CANCEL_SETTLE_MS = 12_000;
     /**
      * Cell endings where nothing will ever read an in-flight provider answer. `error` is
      * deliberately absent: a cell that throws may still have deliberately started a call it
@@ -314,16 +356,71 @@ export async function startKernel(options) {
         const blocks = [...result.blocks, { kind: 'text', text: catalogRecoveryNotice(failure) }];
         return { ...result, blocks, output: textOf(blocks).trimEnd() };
     };
+    /**
+     * Stop the active cell through the kernel, and hand back whatever the kernel answered.
+     *
+     * Cancelling normally keeps the kernel and its earlier bindings; only a cell that will not stop
+     * within the grace period restarts it and discards them. The kernel answers with the cell's
+     * *terminal* result when it already has one — that is the partial output a cancelled cell produced
+     * before it stopped — and with a "cancellation was requested, wait for it" note when the stop is
+     * still in progress, which is why the caller gets the outcome rather than nothing.
+     */
     const cancelActiveCell = async () => {
         if (activeCellId === undefined)
-            return;
+            return undefined;
         const cellId = activeCellId;
         activeCellId = undefined;
-        // Cancelling normally keeps the kernel and its earlier bindings; only a cell that
-        // will not stop within the grace period restarts the kernel and discards them.
-        await call('node_repl_cancel', { cell_id: cellId, yield_time_ms: 5_000 });
-        // Nothing can read what that cell was waiting for now.
-        options.bridge.abandonInFlight(`cell ${cellId} was cancelled`);
+        try {
+            const outcome = await call('node_repl_cancel', { cell_id: cellId, yield_time_ms: CANCEL_GRACE_MS });
+            // Nothing can read what that cell was waiting for now.
+            options.bridge.abandonInFlight(`cell ${cellId} was cancelled`);
+            return outcome;
+        }
+        catch (error) {
+            // The cell is gone either way; a kernel that refused the cancel is reported by the caller as a
+            // cancellation it could not confirm, which is more honest than throwing from a stop.
+            options.bridge.abandonInFlight(`cell ${cellId} could not be cancelled: ${String(error)}`);
+            return undefined;
+        }
+    };
+    /** The official server's answer when a cancel is still settling rather than settled. */
+    const CANCEL_PENDING_NOTICE = /Cancellation was requested/;
+    /** One bounded wait for a cancelled cell's terminal result — the output it produced so far. */
+    const collectCancelled = async (cellId) => {
+        try {
+            return await call('node_repl_wait', { cell_id: cellId, yield_time_ms: CANCEL_HANDOFF_MS });
+        }
+        catch (error) {
+            return undefined;
+        }
+    };
+    /**
+     * Stop the active cell and wait until the kernel has actually let go of it.
+     *
+     * `node_repl_cancel` answers with the cell's terminal result when there is one, and with a
+     * "cancellation was requested — wait for it" note when the stop is still settling. Until that
+     * result exists the kernel keeps its single active-cell slot, and the *next* cell is refused with
+     * "node_repl already has active cell …" — which reads as a broken runtime rather than a stopped
+     * one. So the cancel is followed by bounded waits, and the caller gets the ending the cell really
+     * reached (or `undefined` when the kernel never reported one).
+     */
+    const cancelAndSettle = async (cellId) => {
+        const answer = await cancelActiveCell();
+        let settled = answer !== undefined && !CANCEL_PENDING_NOTICE.test(answer.result.output) ? answer : undefined;
+        const settleDeadline = Date.now() + CANCEL_SETTLE_MS;
+        while (settled === undefined && Date.now() < settleDeadline) {
+            const waited = await collectCancelled(cellId);
+            // A failed wait means the kernel no longer has that cell at all: the slot is free, which is
+            // what this function guarantees, and the result is whatever was already collected.
+            if (waited === undefined)
+                break;
+            if (CANCEL_PENDING_NOTICE.test(waited.result.output))
+                continue;
+            if (waited.runningCellId !== undefined)
+                continue;
+            settled = waited;
+        }
+        return settled;
     };
     const session = {
         run: async (code, runOptions) => {
@@ -333,52 +430,141 @@ export async function startKernel(options) {
             const began = Date.now();
             const timeoutMs = runOptions?.timeoutMs ?? options.defaultTimeoutMs;
             const deadline = Date.now() + timeoutMs + DRAIN_GRACE_MS;
-            let outcome = await call('node_repl', {
-                code,
-                timeout_ms: timeoutMs,
-                // Ask for the caller's whole budget up front: an ordinary cell then returns its
-                // result in this one round trip instead of yielding at the kernel's 10 s default.
-                yield_time_ms: Math.min(Math.max(timeoutMs, 1), MAX_YIELD_MS),
-                ...runOptions?.title === undefined ? {} : { title: runOptions.title.slice(0, 80) },
+            const signal = runOptions?.signal;
+            // The person pressed stop. That is a different event from the budget running out, and it
+            // cannot wait for a kernel yield to be noticed — a `node_repl_wait` may block for up to
+            // MAX_YIELD_MS while the cell drives a browser or an IDE — so every call below races the
+            // abort, and the cell is stopped through the kernel rather than merely abandoned.
+            let stopping = signal?.aborted === true;
+            const onAbort = () => { stopping = true; };
+            const aborting = new Promise(resolve => {
+                if (signal === undefined)
+                    return;
+                if (signal.aborted) {
+                    resolve('host-abort');
+                    return;
+                }
+                signal.addEventListener('abort', () => resolve('host-abort'), { once: true });
             });
-            activeCellId = outcome.runningCellId;
-            while (outcome.runningCellId !== undefined && Date.now() < deadline) {
-                outcome = await call('node_repl_wait', {
-                    cell_id: outcome.runningCellId,
-                    yield_time_ms: Math.min(Math.max(deadline - Date.now(), 1), MAX_YIELD_MS),
+            const raceAbort = async (work) => {
+                if (signal === undefined)
+                    return await work;
+                if (signal.aborted)
+                    return 'host-abort';
+                return await Promise.race([work, aborting]);
+            };
+            signal?.addEventListener('abort', onAbort, { once: true });
+            try {
+                // First call, capped when the host can cancel: the kernel hands back a cell id only when a
+                // call returns, so until then a cancellation has nothing to aim at. The cap costs one extra
+                // local round trip for a cell that outlives it, and it keeps that blind window short.
+                const firstCall = call('node_repl', {
+                    code,
+                    timeout_ms: timeoutMs,
+                    // Ask for the caller's whole budget up front: an ordinary cell then returns its
+                    // result in this one round trip instead of yielding at the kernel's 10 s default.
+                    yield_time_ms: signal === undefined
+                        ? Math.min(Math.max(timeoutMs, 1), MAX_YIELD_MS)
+                        : Math.min(Math.max(timeoutMs, 1), MAX_YIELD_MS, CANCELLABLE_FIRST_YIELD_MS),
+                    ...runOptions?.title === undefined ? {} : { title: runOptions.title.slice(0, 80) },
                 });
-                activeCellId = outcome.runningCellId;
+                const raced = await raceAbort(firstCall);
+                let outcome = raced === 'host-abort' ? undefined : raced;
+                if (raced === 'host-abort') {
+                    // The stop arrived before this call returned, so the cell exists (or is about to) without a
+                    // name to cancel yet: the answer to this same call is the only place its id appears.
+                    // Waiting for it is what makes the stop reach the cell — abandoning the call instead leaves
+                    // a cell running and the kernel's single active-cell slot occupied, so the *next* cell is
+                    // refused with "already has active cell", which reads as a broken runtime.
+                    const late = await firstCall.catch(() => undefined);
+                    if (late === undefined)
+                        outcome = undefined;
+                    else if (late.runningCellId !== undefined)
+                        activeCellId = late.runningCellId;
+                    else
+                        outcome = late;
+                }
+                else {
+                    activeCellId = raced.runningCellId;
+                }
+                while (outcome !== undefined && outcome.runningCellId !== undefined && Date.now() < deadline) {
+                    const runningId = outcome.runningCellId;
+                    const next = await raceAbort(call('node_repl_wait', {
+                        cell_id: runningId,
+                        yield_time_ms: Math.min(Math.max(deadline - Date.now(), 1), MAX_YIELD_MS),
+                    }));
+                    if (next === 'host-abort') {
+                        outcome = undefined;
+                        break;
+                    }
+                    outcome = next;
+                    activeCellId = outcome.runningCellId;
+                }
+                // A stop that landed while the cell was still running: stop it through the kernel, wait for
+                // it to let go of its single active-cell slot, and report the ending it actually reached —
+                // including whatever it printed before it stopped.
+                if (stopping && activeCellId !== undefined) {
+                    // Captured *before* the cancel: cancelling is what abandons those calls, so afterwards the
+                    // list is empty and the notice could no longer name what the stop cut off.
+                    const calls = options.bridge.inFlightCalls();
+                    const settled = await cancelAndSettle(activeCellId);
+                    const base = settled?.result ?? {
+                        status: 'cancelled',
+                        blocks: [],
+                        output: '',
+                        durationMs: Date.now() - began,
+                    };
+                    const blocks = [...base.blocks, { kind: 'text', text: hostCancelledNotice(calls) }];
+                    return {
+                        ...base,
+                        status: base.status === 'ok' ? 'cancelled' : base.status,
+                        blocks,
+                        output: textOf(blocks).trimEnd(),
+                        durationMs: Date.now() - began,
+                    };
+                }
+                if (outcome === undefined) {
+                    // The host stopped the cell, but it had already finished by the time we looked: say so
+                    // rather than inventing an ending, and leave its result unread like any stopped call.
+                    const blocks = [{ kind: 'text', text: hostCancelledNotice(options.bridge.inFlightCalls()) }];
+                    return { status: 'cancelled', blocks, output: textOf(blocks).trimEnd(), durationMs: Date.now() - began };
+                }
+                // Nothing can read an in-flight provider answer once the cell is gone, so the calls still
+                // waiting are captured *here* — before either path below abandons them — and named in the
+                // result. Without that, a cell that ran out of budget mid-build reports a bare timeout and
+                // the reader cannot tell "the IDE was still working, give me a bigger budget" from "the tool
+                // hung", which are different next moves.
+                const abandoned = ABANDONED_CELL_STATUSES.has(outcome.result.status)
+                    ? options.bridge.inFlightCalls()
+                    : [];
+                // The budget is spent and the cell is still going. The kernel has one active-cell
+                // slot: leaving it occupied would refuse every later cell — including the install
+                // cell of a reset — so the cell is cancelled rather than abandoned.
+                if (outcome.runningCellId !== undefined)
+                    await cancelActiveCell();
+                // A cell the kernel stopped, or one that crashed, cannot read an in-flight provider
+                // answer either — and a request left running blocks that provider's session for every
+                // later cell. A cell that finished on its own is left alone: it may deliberately have
+                // fired a call it never awaited.
+                if (abandoned.length > 0 || ABANDONED_CELL_STATUSES.has(outcome.result.status)) {
+                    options.bridge.abandonInFlight(`cell ended as ${outcome.result.status}: nothing can read its answers`);
+                }
+                let result = { ...outcome.result, durationMs: Date.now() - began };
+                // A crashed cell took the kernel with it; the replacement has no catalog unless this
+                // puts one back.
+                if (result.status === 'crashed')
+                    result = await recoverCatalog(result);
+                const notice = abandonedCallsNotice(abandoned, result.status, timeoutMs);
+                if (notice === undefined)
+                    return result;
+                const blocks = [...result.blocks, { kind: 'text', text: notice }];
+                return { ...result, blocks, output: textOf(blocks).trimEnd() };
             }
-            // Nothing can read an in-flight provider answer once the cell is gone, so the calls still
-            // waiting are captured *here* — before either path below abandons them — and named in the
-            // result. Without that, a cell that ran out of budget mid-build reports a bare timeout and
-            // the reader cannot tell "the IDE was still working, give me a bigger budget" from "the tool
-            // hung", which are different next moves.
-            const abandoned = ABANDONED_CELL_STATUSES.has(outcome.result.status)
-                ? options.bridge.inFlightCalls()
-                : [];
-            // The budget is spent and the cell is still going. The kernel has one active-cell
-            // slot: leaving it occupied would refuse every later cell — including the install
-            // cell of a reset — so the cell is cancelled rather than abandoned.
-            if (outcome.runningCellId !== undefined)
-                await cancelActiveCell();
-            // A cell the kernel stopped, or one that crashed, cannot read an in-flight provider
-            // answer either — and a request left running blocks that provider's session for every
-            // later cell. A cell that finished on its own is left alone: it may deliberately have
-            // fired a call it never awaited.
-            if (abandoned.length > 0 || ABANDONED_CELL_STATUSES.has(outcome.result.status)) {
-                options.bridge.abandonInFlight(`cell ended as ${outcome.result.status}: nothing can read its answers`);
+            finally {
+                // The listener is for this cell only: one signal outlives a single `js` call (a host keeps
+                // it for the whole turn), and a stale listener would mark the *next* cell as stopping.
+                signal?.removeEventListener('abort', onAbort);
             }
-            let result = { ...outcome.result, durationMs: Date.now() - began };
-            // A crashed cell took the kernel with it; the replacement has no catalog unless this
-            // puts one back.
-            if (result.status === 'crashed')
-                result = await recoverCatalog(result);
-            const notice = abandonedCallsNotice(abandoned, result.status, timeoutMs);
-            if (notice === undefined)
-                return result;
-            const blocks = [...result.blocks, { kind: 'text', text: notice }];
-            return { ...result, blocks, output: textOf(blocks).trimEnd() };
         },
         reset: async () => {
             // `node_repl_reset` refuses while a cell is active, so clear the slot first.
