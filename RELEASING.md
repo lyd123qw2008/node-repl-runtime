@@ -1,18 +1,21 @@
 # 发布流程
 
-三个包同版本锁步发布：
+四个包同版本锁步发布：
 
 | 包 | 作用 |
 | --- | --- |
-| `@lyd123qw2008/node-repl-runtime` | 运行时本体（内核 + provider 目录投影） |
+| `@lyd123qw2008/node-repl-kernel-engine` | 常驻内核引擎（Qwen `node-repl-mcp` 的自维护派生，2026-10-09 起由本仓库维护） |
+| `@lyd123qw2008/node-repl-runtime` | 运行时本体（provider 目录投影 + 内核会话） |
 | `@lyd123qw2008/node-repl-dsh-adapter` | 两个工具的模型面（`js` / `js_reset`） |
 | `@lyd123qw2008/node-repl-dsh-bootstrap` | 从配置装配运行时并 `provide('nodeReplRuntime')` |
 
-发布顺序 `runtime → adapter → bootstrap`（后两者依赖前者），`pnpm -r publish` 会按拓扑顺序处理。
+发布顺序 `kernel-engine → runtime → adapter → bootstrap`（逐级依赖），workflow 按这个顺序逐个 `pnpm pack` + `npm publish`。
+
+> `kernel-engine` 的 **0.1.5 是它的首次发布**：npm 规定 trusted publisher 只能配置到 registry 里已存在的包，所以这一次必须用 `npm login` 手动发（见下），之后再为它在 npm 后台配 OIDC，后续版本才走 workflow。
 
 ## 为什么首次必须手动
 
-npm 规定 **trusted publisher 只能配置到已经存在于 registry 的包上**。所以第一次发布必须用传统登录方式完成，之后才能在 npm 上为三个包分别配置 OIDC 发布者，交给 `.github/workflows/publish.yml`。
+npm 规定 **trusted publisher 只能配置到已经存在于 registry 的包上**。所以第一次发布必须用传统登录方式完成，之后才能在 npm 上为四个包分别配置 OIDC 发布者，交给 `.github/workflows/publish.yml`。
 
 ## 第一次发布（手动，仅一次）
 
@@ -51,14 +54,14 @@ npmjs.com → 该包 → **Settings → Trusted publishing → GitHub Actions**�
 | Workflow filename | `publish.yml` |
 | Environment | 留空 |
 
-三个包都要各配一次。
+四个包都要各配一次（`kernel-engine` 要等它的首次手动发布完成后）。
 
 ## 之后的版本
 
-1. 改三个 `packages/*/package.json` 的 `version`（保持一致），提交并推送；
+1. 改四个 `packages/*/package.json` 的 `version`（保持一致），提交并推送；
 2. 等 CI 绿；
 3. GitHub → Actions → **Publish** → Run workflow：
-   - `expected_version`：填本次版本号（可选但推荐，会在发布前校验三个包一致）；
+   - `expected_version`：填本次版本号（可选但推荐，会在发布前校验四个包一致）；
    - `dry_run`：先跑一次 true 看清楚要发什么，再跑 false。
 
 OIDC 不需要任何长期 token；provenance 由 npm 在用 trusted publishing 时自动生成。

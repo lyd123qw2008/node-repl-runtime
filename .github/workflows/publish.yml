@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           node -e '
-            for (const p of ["runtime", "adapter-dsh", "dsh-bootstrap"]) {
+            for (const p of ["kernel-engine", "runtime", "adapter-dsh", "dsh-bootstrap"]) {
               const v = require(`./packages/${p}/package.json`).version;
               if (v !== process.env.EXPECTED_VERSION) {
                 throw new Error(`${p}: ${v} !== ${process.env.EXPECTED_VERSION}`);
