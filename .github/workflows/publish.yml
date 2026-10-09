@@ -83,22 +83,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ./artifacts
-          for pkg in kernel-engine runtime dsh-adapter dsh-bootstrap; do
-            name="@lyd123qw2008/node-repl-$pkg"
-            version=$(node -p "require('./packages/$pkg/package.json').version")
-            # A version already on the registry is not an error: it is a package whose first
-            # publish had to be done by hand (npm attaches a trusted publisher only to a package
-            # that exists), or a re-run of this workflow. Publishing it again would fail with
-            # "cannot publish over the previously published versions" and take the remaining
-            # packages down with it, since the job stops at the first failure.
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "skip $name@$version (already published)"
-              continue
-            fi
-            tarball=$(pnpm --filter "$name" pack --pack-destination ./artifacts | tail -1)
-            if [ "${{ inputs.dry_run }}" = "true" ]; then
-              echo "dry run: would publish $tarball"
-            else
-              npm publish "$tarball" --access public --ignore-scripts
-            fi
-          done
+          # pnpm is the only source of truth here. A hand-written list had to map directory names
+          # to package names and got it wrong (packages/adapter-dsh publishes
+          # @lyd123qw2008/node-repl-dsh-adapter), which failed the job on the third package.
+          # `pack --json` reports name, version and the tarball it wrote, in dependency order.
+          pnpm --filter "./packages/*" -r pack --pack-destination ./artifacts --json |
+            node -e 'let raw="";process.stdin.on("data",d=>raw+=d);process.stdin.on("end",()=>{for(const p of JSON.parse(raw))console.log(p.name+"\t"+p.version+"\t"+p.filename)})' |
+            while IFS=$'\t' read -r name version tarball; do
+              # A version already on the registry is not an error: a package whose first publish
+              # had to be done by hand (npm attaches a trusted publisher only to a package that
+              # already exists), or a re-run of this workflow. Publishing it again fails with
+              # "cannot publish over the previously published versions" and takes the remaining
+              # packages down, because the job stops at the first failure.
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "skip $name@$version (already published)"
+                continue
+              fi
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                echo "dry run: would publish $tarball"
+              else
+                npm publish "$tarball" --access public --ignore-scripts
+              fi
+            done
