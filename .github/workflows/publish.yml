@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ./artifacts
-          for pkg in runtime dsh-adapter dsh-bootstrap; do
+          for pkg in kernel-engine runtime dsh-adapter dsh-bootstrap; do
             tarball=$(pnpm --filter "@lyd123qw2008/node-repl-$pkg" pack --pack-destination ./artifacts | tail -1)
             if [ "${{ inputs.dry_run }}" = "true" ]; then
               echo "dry run: would publish $tarball"
