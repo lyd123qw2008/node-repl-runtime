@@ -124,7 +124,9 @@ describe('binding semantics through the real kernel', () => {
 
   it('rejects every tool-runtime global name, and stays usable', async () => {
     const manager = makeManager();
-    // Must match kernel.mjs's intrinsicObjectDefineProperties bootstrap.
+    // Must match kernel.mjs's intrinsicObjectDefineProperties bootstrap, plus the globals the
+    // OUTER runtime installs (`cap`, `capHelp` — packages/runtime/src/kernel.ts). The latter are
+    // not this engine's own, but a cell that declares one replaces the catalog proxy silently.
     const reserved = [
       'nodeRepl',
       'console',
@@ -132,6 +134,8 @@ describe('binding semantics through the real kernel', () => {
       'setInterval',
       'clearTimeout',
       'clearInterval',
+      'cap',
+      'capHelp',
     ];
     for (const name of reserved) {
       const r = await manager.exec({
