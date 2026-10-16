@@ -197,7 +197,9 @@ describe('prepareNodeReplCell', () => {
     expect(prepared.source).toContain('const 变量 = "你好",');
     expect(prepared.source).toContain('throw new Error("停止");');
     const firstCommit = prepared.source.indexOf('["变量"] = {binding:');
-    const thrown = prepared.source.indexOf('throw new Error');
+    // The user's own throw, not any `throw new Error(`: the generated prelude contains host-global
+    // guards that throw too, so a generic needle would measure the wrong statement.
+    const thrown = prepared.source.indexOf('throw new Error("停止")');
     const ghostCommit = prepared.source.indexOf('["ghost"] = {binding:');
     expect(firstCommit).toBeGreaterThan(0);
     expect(firstCommit).toBeLessThan(thrown);
