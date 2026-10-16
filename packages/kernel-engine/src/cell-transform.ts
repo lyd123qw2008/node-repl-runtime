@@ -67,32 +67,6 @@ const RESERVED_GLOBAL_NAMES = new Set([
   'clearInterval',
 ]);
 
-/**
- * Globals installed by the *outer runtime*, and the shape each must keep.
- *
- * This engine does not create these: the runtime sets them from an install cell
- * (`globalThis.cap = mod.cap`, `globalThis.capHelp = mod.capHelp` — see
- * `packages/runtime/src/kernel.ts`). They belong in the same class as the reserved names above
- * because losing one is silent, and the failure is worse: a cell that declares `cap` does not
- * fail at all — it *replaces* the catalog proxy for every later cell, and the model only finds
- * out when some later `cap.*` call throws
- * `..._references.cap.value.list is not a function`, which names nothing actionable.
- *
- * Two guards, because one is not enough:
- *
- *   - a declaration of one of these names is rejected up front (like `nodeRepl`);
- *   - every cell's prelude re-asserts that the live value is still the host's. The declaration
- *     check cannot see a replacement that did not come from a declaration (a plain
- *     `cap = {}` assignment, or whatever else may one day write the binding), and a value that
- *     is present but wrong passes every `typeof cap === 'object'` check anyone would write.
- */
-const HOST_GLOBAL_GUARDS = new Map<string, string>([
-  // Written so the check itself cannot throw on a hostile value: `cap = null` must produce the
-  // named error below, not "Cannot read properties of null".
-  ['cap', 'cap !== null && typeof cap === "object" && typeof cap.list === "function"'],
-  ['capHelp', 'typeof capHelp === "function"'],
-]);
-
 let parserInstance: Parser | null = null;
 let parserInitPromise: Promise<void> | null = null;
 let parserInitError: Error | null = null;
@@ -402,27 +376,6 @@ function generatedPrefix(
   throw new Error('Unable to allocate collision-free REPL identifiers');
 }
 
-/**
- * Statements that verify each host global still has the shape the runtime installed.
- *
- * Emitted into every cell's prelude. Deliberately a throw rather than a repair: the runtime
- * owns these values, and silently reinstating one would hide that something replaced it.
- *
- * `typeof x !== 'undefined'` gates the check so the runtime's own install cell — which runs
- * before `cap` exists — is unaffected, and so a kernel that came back without a catalog keeps
- * reporting the documented "cap is undefined, call js_reset" story instead of this one.
- */
-function hostGlobalGuards(): string[] {
-  return [...HOST_GLOBAL_GUARDS].map(
-    ([name, shape]) =>
-      `if(typeof ${name}!=="undefined"&&!(${shape}))` +
-      `throw new Error(${JSON.stringify(
-        `The kernel's '${name}' global was replaced (it is no longer the capability catalog). ` +
-          `Call js_reset to reinstall it; earlier bindings are discarded.`,
-      )});`,
-  );
-}
-
 function snapshotAssignments(
   snapshotName: string,
   references: string,
@@ -658,13 +611,8 @@ export async function prepareNodeReplCell(
     // permanently break it for the rest of the session (e.g. declaring
     // `nodeRepl` silently disables nodeRepl.write with no way back except a
     // reset). Reject the cell with an actionable message instead.
-    //
-    // `HOST_GLOBAL_GUARDS` covers the runtime's own globals (cap, capHelp) for the same
-    // reason, and the failure there is harder to read: the cell succeeds, and only a later
-    // `cap.*` call fails, from a transformed name the model never wrote.
-    const shadowedGlobal = [...currentBindings.keys()].find(
-      (name) =>
-        RESERVED_GLOBAL_NAMES.has(name) || HOST_GLOBAL_GUARDS.has(name),
+    const shadowedGlobal = [...currentBindings.keys()].find((name) =>
+      RESERVED_GLOBAL_NAMES.has(name),
     );
     if (shadowedGlobal) {
       throw new Error(
@@ -787,15 +735,6 @@ export async function prepareNodeReplCell(
           ({ name, kind }) =>
             `${kind} ${name} = ${previousNamespace}[${JSON.stringify(name)}].value;`,
         ),
-      // Host-global self-check (issue #11). A replaced `cap` is silent: the cell that does it
-      // succeeds, and only some later call fails, from a transformed identifier the model never
-      // wrote. Asserting the live shape at the top of every cell turns that into a named failure
-      // at the first opportunity, and `js_reset` is the documented recovery.
-      //
-      // Only a *wrong* value is reported, never an absent one: absent is the replaced-kernel case
-      // the tool description already covers, and it is also the state during the runtime's own
-      // install cell — failing there would break installation itself.
-      ...hostGlobalGuards(),
     ].join('');
 
     // Guard every user-authored async suspension point. Cancelling a cell must
